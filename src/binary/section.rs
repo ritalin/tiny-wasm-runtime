@@ -6,3 +6,4 @@ pub enum SectionCode {
     Function = 0x03,
     Code = 0x0a,
 }
+
