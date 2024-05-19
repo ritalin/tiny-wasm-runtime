@@ -3,7 +3,7 @@ use nom::{bytes::complete::{tag, take}, multi::many0, number::complete::{le_u32,
 use nom_leb128::leb128_u32;
 use num_traits::FromPrimitive;
 
-use super::{instruction::Instruction, section::{Function, FunctionLocal}, types::{FuncType, ValueType}};
+use super::{instruction::Instruction, opcode::Opcode, section::{Function, FunctionLocal}, types::{FuncType, ValueType}};
 
 const WASM_MAGIC: &str = "\0asm";
 
@@ -119,6 +119,27 @@ fn decode_function_section(input: &[u8]) -> IResult<&[u8], Vec<u32>> {
     Ok((input, fns))
 }
 
+fn decode_opcode(input: &[u8]) -> IResult<&[u8], Opcode> {
+    let (input, opcode) = le_u8(input)?;
+
+    use nom::error::Error as NomError;
+    use nom::error::ErrorKind as NomErrKind;
+    Opcode::from_u8(opcode).map(|x| (input, x)).ok_or_else(|| nom::Err::Failure(NomError { input, code: NomErrKind::Verify }))
+}
+
+fn decode_instruction(input: &[u8]) -> IResult<&[u8], Instruction> {
+    let (input, op) = decode_opcode(input)?;
+
+    match op {
+        Opcode::End => Ok((input, Instruction::End)),
+        Opcode::LocalGet => {
+            let (input, i) = leb128_u32(input)?;
+            Ok((input, Instruction::LocalGet(i)))
+        }
+        Opcode::I32Add => Ok((input, Instruction::I32Add)),
+    }
+}
+
 fn decode_function_body(input: &[u8]) -> IResult<&[u8], Function> {
     let mut locals = vec![];
 
@@ -127,16 +148,27 @@ fn decode_function_body(input: &[u8]) -> IResult<&[u8], Function> {
 
     for _ in 0..count {
         let (rest, type_count) = leb128_u32(input)?;
-        let (rest, ty) = le_u8(rest)?;
+        let (rest, value_type) = decodea_value_type(rest)?;
 
-        locals.push(FunctionLocal { type_count, value_type: ty.into() });
+        locals.push(FunctionLocal { type_count, value_type });
 
         input = rest;
     }
 
+    // decode instructions
+    let mut code = vec![];
+    let mut remaining = input;
+
+    while !remaining.is_empty() {
+        let (rest, inst) = decode_instruction(remaining)?;
+        code.push(inst);
+
+        remaining = rest;
+    }
+
     Ok((input, Function {
         locals,
-        code: vec![Instruction::End],
+        code,
     }))
 }
 
@@ -245,6 +277,29 @@ mod tests {
     }
 
     #[test]
+    fn decode_fn_add() -> Result<()> {
+        let wasm = wat::parse_str("(module (func (param i32 i32)(result i32) (local.get 0) (local.get 1) i32.add))")?;
+        let module = Module::new(&wasm)?;
+        let expected = Module {
+            type_section: Some(vec![
+                FuncType { 
+                    params: vec![ValueType::I32, ValueType::I32], 
+                    returns: vec![ValueType::I32] }
+            ]),
+            fn_section: Some(vec![0]),
+            code_section: Some(vec![Function { locals: vec![], code: vec![
+                Instruction::LocalGet(0),
+                Instruction::LocalGet(1),
+                Instruction::I32Add,
+                Instruction::End
+            ] }]),
+            ..Default::default()
+        };
+        assert_eq!(expected, module);
+        Ok(())
+    }
+
+    #[test]
     fn decode_section_headers() -> Result<()> {
         assert_eq!((SectionCode::Type, 4u32), super::decode_section_header(&[0x01, 0x04])?.1);
         assert_eq!((SectionCode::Function, 2u32), super::decode_section_header(&[0x03, 0x02])?.1);
@@ -273,6 +328,14 @@ mod tests {
         let ret = super::decode_function_section(&[0x03, 0, 0x01, 0, 0x0a])?.1;
         assert_eq!(3, ret.len());
         assert_eq!(vec![0, 1, 0], ret);
+        Ok(())
+    }
+
+    #[test]
+    fn decode_instructions() -> Result<()> {
+        assert_eq!(Instruction::End, super::decode_instruction(&[0x0B])?.1);
+        assert_eq!(Instruction::I32Add, super::decode_instruction(&[0x6A])?.1);
+        assert_eq!(Instruction::LocalGet(1), super::decode_instruction(&[0x20, 1])?.1);
         Ok(())
     }
 }
