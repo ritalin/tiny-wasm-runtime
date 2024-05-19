@@ -3,7 +3,7 @@ use nom::{bytes::complete::{tag, take}, number::complete::{le_u32, le_u8}, seque
 use nom_leb128::leb128_u32;
 use num_traits::FromPrimitive;
 
-use super::types::FuncType;
+use super::{instruction::Instruction, section::Function, types::FuncType};
 
 const WASM_MAGIC: &str = "\0asm";
 
@@ -13,11 +13,12 @@ pub struct Module {
     pub version: u32,
     pub type_section: Option<Vec<FuncType>>,
     pub fn_section: Option<Vec<u32>>,
+    pub code_section: Option<Vec<Function>>,
 }
 
 impl Default for Module {
     fn default() -> Self {
-        Self { magic: WASM_MAGIC.to_string(), version: 1, type_section: None, fn_section: None }
+        Self { magic: WASM_MAGIC.to_string(), version: 1, type_section: None, fn_section: None, code_section: None }
     }
 }
 
@@ -37,7 +38,7 @@ impl Module {
         let mut remaining = input;
         
         while !remaining.is_empty() {
-            match decode_section_header(input) {
+            match decode_section_header(remaining) {
                 Ok((input, (code, sz))) => {
                     let (rest, section_contents) = take(sz)(input)?;
 
@@ -49,6 +50,10 @@ impl Module {
                         SectionCode::Function => {
                             let (_, fns) = decode_function_section(section_contents)?;
                             module.fn_section = Some(fns);
+                        }
+                        SectionCode::Code => {
+                            let (_, code) = decode_code_section(section_contents)?;
+                            module.code_section = Some(code);
                         }
                         _ => unreachable!()
                     }
@@ -74,8 +79,7 @@ fn decode_section_header(input: &[u8]) -> IResult<&[u8], (SectionCode, u32)> {
 }
 
 fn decode_type_section(input: &[u8]) -> IResult<&[u8], Vec<FuncType>> {
-    _ = input;
-    Ok((&[], vec![]))
+    Ok((input, vec![FuncType::default()]))
 }
 
 fn decode_function_section(input: &[u8]) -> IResult<&[u8], Vec<u32>> {
@@ -91,17 +95,43 @@ fn decode_function_section(input: &[u8]) -> IResult<&[u8], Vec<u32>> {
     Ok((input, fns))
 }
 
+fn decode_code_section(input: &[u8]) -> IResult<&[u8], Vec<Function>> {
+    let mut fns = vec![];
+
+    fns.push(Function {
+        locals: vec![],
+        code: vec![Instruction::End],
+    });
+
+    Ok((input, fns))
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::binary::{module::Module, section::SectionCode};
+    use crate::binary::{instruction::Instruction, module::Module, section::{Function, SectionCode}, types::FuncType};
     use anyhow::Result;
 
     #[test]
     fn decode_simplest_module() -> Result<()> {
-        // プリアンブル飲みのwasm
+        // プリアンブルのみのwasm
         let wasm = wat::parse_str("(module)")?;
         let module = Module::new(&wasm)?;
         assert_eq!(module, Module::default());
+        Ok(())
+    }
+
+    #[test]
+    fn decode_simplest_fn() -> Result<()> {
+        let wasm = wat::parse_str("(module (func))")?;
+        let module = Module::new(&wasm)?;
+
+        let expected = Module {
+            type_section: Some(vec![FuncType::default()]),
+            fn_section: Some(vec![0]),
+            code_section: Some(vec![Function { locals: vec![], code: vec![Instruction::End] }]),
+            ..Default::default()
+        };
+        assert_eq!(expected, module);
         Ok(())
     }
 
