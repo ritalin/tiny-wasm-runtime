@@ -91,12 +91,17 @@ fn decode_type_section(input: &[u8]) -> IResult<&[u8], Vec<FuncType>> {
 
     for _ in 0..type_count {
         let(rest, _) = le_u8(input)?; // omit fn sig
-        // decode fn parameters
-        let(rest, param_count) = leb128_u32(rest)?;
-        let(rest, tys) = take(param_count)(rest)?;
+        // decode fn parameter types
+        let(rest, count) = leb128_u32(rest)?;
+        let(rest, tys) = take(count)(rest)?;
         let(_, params) = many0(decodea_value_type)(tys)?;
         
-        fns.push(FuncType { params, returns: vec![] });
+        // decode fn return types
+        let(rest, count) = leb128_u32(rest)?;
+        let(rest, tys) = take(count)(rest)?;
+        let(_, returns) = many0(decodea_value_type)(tys)?;
+
+        fns.push(FuncType { params, returns });
         input = rest;
     }
 
@@ -165,6 +170,24 @@ mod tests {
                 FuncType { 
                     params: vec![ValueType::I32, ValueType::I64], 
                     returns: vec![] }
+            ]),
+            fn_section: Some(vec![0]),
+            code_section: Some(vec![Function { locals: vec![], code: vec![Instruction::End] }]),
+            ..Default::default()
+        };
+        assert_eq!(expected, module);
+        Ok(())
+    }
+
+    #[test]
+    fn decode_simplest_fn_with_returns() -> Result<()> {
+        let wasm = wat::parse_str("(module (func (result i32)))")?;
+        let module = Module::new(&wasm)?;
+        let expected = Module {
+            type_section: Some(vec![
+                FuncType { 
+                    params: vec![], 
+                    returns: vec![ValueType::I32] }
             ]),
             fn_section: Some(vec![0]),
             code_section: Some(vec![Function { locals: vec![], code: vec![Instruction::End] }]),
