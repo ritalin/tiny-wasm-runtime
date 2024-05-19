@@ -1,9 +1,9 @@
 use crate::binary::section::SectionCode;
-use nom::{bytes::complete::{tag, take}, number::complete::{le_u32, le_u8}, sequence::pair, IResult};
+use nom::{bytes::complete::{tag, take}, multi::many0, number::complete::{le_u32, le_u8}, sequence::pair, IResult};
 use nom_leb128::leb128_u32;
 use num_traits::FromPrimitive;
 
-use super::{instruction::Instruction, section::Function, types::FuncType};
+use super::{instruction::Instruction, section::Function, types::{FuncType, ValueType}};
 
 const WASM_MAGIC: &str = "\0asm";
 
@@ -78,8 +78,29 @@ fn decode_section_header(input: &[u8]) -> IResult<&[u8], (SectionCode, u32)> {
     ))
 }
 
+fn decodea_value_type(input: &[u8]) -> IResult<&[u8], ValueType> {
+    let (input, v) = le_u8(input)?;
+    Ok((input, v.into()))
+}
+
 fn decode_type_section(input: &[u8]) -> IResult<&[u8], Vec<FuncType>> {
-    Ok((input, vec![FuncType::default()]))
+    eprintln!("{input:?}", );
+
+    let (mut input, type_count) = leb128_u32(input)?;
+    let mut fns = vec![];
+
+    for _ in 0..type_count {
+        let(rest, _) = le_u8(input)?; // omit fn sig
+        // decode fn parameters
+        let(rest, param_count) = leb128_u32(rest)?;
+        let(rest, tys) = take(param_count)(rest)?;
+        let(_, params) = many0(decodea_value_type)(tys)?;
+        
+        fns.push(FuncType { params, returns: vec![] });
+        input = rest;
+    }
+
+    Ok((input, fns))
 }
 
 fn decode_function_section(input: &[u8]) -> IResult<&[u8], Vec<u32>> {
@@ -108,7 +129,7 @@ fn decode_code_section(input: &[u8]) -> IResult<&[u8], Vec<Function>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::binary::{instruction::Instruction, module::Module, section::{Function, SectionCode}, types::FuncType};
+    use crate::binary::{instruction::Instruction, module::Module, section::{Function, SectionCode}, types::{FuncType, ValueType}};
     use anyhow::Result;
 
     #[test]
@@ -136,10 +157,44 @@ mod tests {
     }
 
     #[test]
+    fn decode_simplest_fn_with_args() -> Result<()> {
+        let wasm = wat::parse_str("(module (func (param i32 i64)))")?;
+        let module = Module::new(&wasm)?;
+        let expected = Module {
+            type_section: Some(vec![
+                FuncType { 
+                    params: vec![ValueType::I32, ValueType::I64], 
+                    returns: vec![] }
+            ]),
+            fn_section: Some(vec![0]),
+            code_section: Some(vec![Function { locals: vec![], code: vec![Instruction::End] }]),
+            ..Default::default()
+        };
+        assert_eq!(expected, module);
+        Ok(())
+    }
+
+    #[test]
     fn decode_section_headers() -> Result<()> {
         assert_eq!((SectionCode::Type, 4u32), super::decode_section_header(&[0x01, 0x04])?.1);
         assert_eq!((SectionCode::Function, 2u32), super::decode_section_header(&[0x03, 0x02])?.1);
         assert_eq!((SectionCode::Code, 4u32), super::decode_section_header(&[0x0a, 0x04])?.1);
+        Ok(())
+    }
+
+    #[test]
+    fn decodea_value_types() -> Result<()> {
+        assert_eq!(ValueType::I32, super::decodea_value_type(&[0x7F])?.1);
+        assert_eq!(ValueType::I64, super::decodea_value_type(&[0x7E])?.1);
+        Ok(())
+    }
+
+    #[test]
+    fn decode_type_sections() -> Result<()> {
+        let ret = super::decode_type_section(&[0x01, 0x60, 0x02, 0x7F, 0x7E, 0])?.1;
+        assert_eq!(1, ret.len());
+        assert_eq!(vec![ValueType::I32, ValueType::I64], ret[0].params);
+        assert_eq!(Vec::<ValueType>::new(), ret[0].returns);
         Ok(())
     }
 
