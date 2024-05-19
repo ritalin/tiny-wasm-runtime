@@ -3,7 +3,7 @@ use nom::{bytes::complete::{tag, take}, multi::many0, number::complete::{le_u32,
 use nom_leb128::leb128_u32;
 use num_traits::FromPrimitive;
 
-use super::{instruction::Instruction, section::Function, types::{FuncType, ValueType}};
+use super::{instruction::Instruction, section::{Function, FunctionLocal}, types::{FuncType, ValueType}};
 
 const WASM_MAGIC: &str = "\0asm";
 
@@ -84,8 +84,6 @@ fn decodea_value_type(input: &[u8]) -> IResult<&[u8], ValueType> {
 }
 
 fn decode_type_section(input: &[u8]) -> IResult<&[u8], Vec<FuncType>> {
-    eprintln!("{input:?}", );
-
     let (mut input, type_count) = leb128_u32(input)?;
     let mut fns = vec![];
 
@@ -121,20 +119,47 @@ fn decode_function_section(input: &[u8]) -> IResult<&[u8], Vec<u32>> {
     Ok((input, fns))
 }
 
+fn decode_function_body(input: &[u8]) -> IResult<&[u8], Function> {
+    let mut locals = vec![];
+
+    // decode local vars
+    let (mut input, count) = leb128_u32(input)?;
+
+    for _ in 0..count {
+        let (rest, type_count) = leb128_u32(input)?;
+        let (rest, ty) = le_u8(rest)?;
+
+        locals.push(FunctionLocal { type_count, value_type: ty.into() });
+
+        input = rest;
+    }
+
+    Ok((input, Function {
+        locals,
+        code: vec![Instruction::End],
+    }))
+}
+
 fn decode_code_section(input: &[u8]) -> IResult<&[u8], Vec<Function>> {
     let mut fns = vec![];
+    let (mut input, count) = leb128_u32(input)?;
 
-    fns.push(Function {
-        locals: vec![],
-        code: vec![Instruction::End],
-    });
+    for _ in 0..count {
+        let (rest, sz_body) = leb128_u32(input)?;
+        let (rest, contents_body) = take(sz_body)(rest)?;
+        let (_, bodies) = decode_function_body(contents_body)?;
+
+        fns.push(bodies);
+
+        input = rest;
+    }
 
     Ok((input, fns))
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::binary::{instruction::Instruction, module::Module, section::{Function, SectionCode}, types::{FuncType, ValueType}};
+    use crate::binary::{instruction::Instruction, module::Module, section::{Function, FunctionLocal, SectionCode}, types::{FuncType, ValueType}};
     use anyhow::Result;
 
     #[test]
@@ -157,6 +182,7 @@ mod tests {
             code_section: Some(vec![Function { locals: vec![], code: vec![Instruction::End] }]),
             ..Default::default()
         };
+
         assert_eq!(expected, module);
         Ok(())
     }
@@ -175,6 +201,27 @@ mod tests {
             code_section: Some(vec![Function { locals: vec![], code: vec![Instruction::End] }]),
             ..Default::default()
         };
+
+        assert_eq!(expected, module);
+        Ok(())
+    }
+
+    #[test]
+    fn decode_simplest_fn_local_vars() -> Result<()> {
+        let wasm = wat::parse_str("(module (func (local i32) (local i64 i64)))")?;
+        let module = Module::new(&wasm)?;
+        let expected = Module {
+            type_section: Some(vec![FuncType::default()]),
+            fn_section: Some(vec![0]),
+            code_section: Some(vec![Function {
+                locals: vec![
+                    FunctionLocal{ type_count:1, value_type: ValueType::I32 },
+                    FunctionLocal{ type_count: 2, value_type: ValueType::I64 }, 
+                ], 
+                code: vec![Instruction::End] }]),
+            ..Module::default()
+        };
+
         assert_eq!(expected, module);
         Ok(())
     }

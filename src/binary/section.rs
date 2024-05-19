@@ -1,6 +1,6 @@
 use num_derive::FromPrimitive;
 
-use super::instruction::Instruction;
+use super::{instruction::Instruction, types::ValueType};
 
 #[derive(Debug, PartialEq, Eq, FromPrimitive)]
 pub enum SectionCode {
@@ -11,7 +11,8 @@ pub enum SectionCode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionLocal {
-
+    pub type_count: u32,
+    pub value_type: ValueType,
 }
 
 #[derive(Default, Debug, PartialEq, Eq)]
