@@ -190,7 +190,7 @@ fn decode_code_section(input: &[u8]) -> IResult<&[u8], Vec<Function>> {
 }
 
 #[cfg(test)]
-mod tests {
+mod decoder_tests {
     use crate::binary::{instruction::Instruction, module::Module, section::{Function, FunctionLocal, SectionCode}, types::{FuncType, ValueType}};
     use anyhow::Result;
 
