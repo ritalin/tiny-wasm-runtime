@@ -1,4 +1,7 @@
-use nom::{bytes::complete::tag, number::complete::le_u32, IResult};
+use crate::binary::section::SectionCode;
+use nom::{bytes::complete::{tag, take}, number::complete::{le_u32, le_u8}, sequence::pair, IResult};
+use nom_leb128::leb128_u32;
+use num_traits::FromPrimitive;
 
 const WASM_MAGIC: &str = "\0asm";
 
@@ -25,13 +28,26 @@ impl Module {
         let (input, _) = tag(WASM_MAGIC.as_bytes())(input)?;
         let (input, version) = le_u32(input)?;
 
-        Ok((input, Module { magic: WASM_MAGIC.to_string(), version }))
+        let module = Module { magic: WASM_MAGIC.to_string(), version };
+
+        Ok((input, module))
     }
+}
+
+fn decode_section_header(input: &[u8]) -> IResult<&[u8], (SectionCode, u32)> {
+    let (input, (code, sz)) = pair(le_u8, leb128_u32)(input)?;
+    Ok((
+        input, 
+        (
+            SectionCode::from_u8(code).expect(&format!("Unexpected section code: {code}")),
+            sz,
+        )
+    ))
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::binary::module::Module;
+    use crate::binary::{module::Module, section::SectionCode};
     use anyhow::Result;
 
     #[test]
@@ -40,6 +56,14 @@ mod tests {
         let wasm = wat::parse_str("(module)")?;
         let module = Module::new(&wasm)?;
         assert_eq!(module, Module::default());
+        Ok(())
+    }
+
+    #[test]
+    fn decode_section_headers() -> Result<()> {
+        assert_eq!((SectionCode::Type, 4u32), super::decode_section_header(&[0x01, 0x04])?.1);
+        assert_eq!((SectionCode::Function, 2u32), super::decode_section_header(&[0x03, 0x02])?.1);
+        assert_eq!((SectionCode::Code, 4u32), super::decode_section_header(&[0x0a, 0x04])?.1);
         Ok(())
     }
 }
