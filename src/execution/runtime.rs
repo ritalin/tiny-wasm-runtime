@@ -1,25 +1,130 @@
-use anyhow::Result;
+use std::{collections::LinkedList};
 
-use super::value::Value;
+use anyhow::{bail, Result};
+
+use crate::binary::{instruction::Instruction, module::Module};
+
+use super::{store::Store, value::Value};
+
+#[derive(Default)]
+pub struct Frame {
+    pub pc: usize,
+    pub insts: Vec<Instruction>,
+    pub locals: Vec<Value>,
+    pub arity: usize,
+    pub sp: usize,
+}
 
 #[derive(Default)]
 pub struct Runtime {
-
+    pub store: Store,
+    pub stack: LinkedList<Value>,
+    pub call_stack: LinkedList<Frame>,
 }
+
 impl Runtime {
-    pub fn instanciate(wasm: Vec<u8>) -> Result<Self> {
-        todo!()
+    pub fn instanciate(wasm: impl AsRef<[u8]>) -> Result<Self> {
+        let module = Module::new(wasm.as_ref())?;
+        let store = Store::new(module)?;
+
+        Ok(Runtime {
+            store,
+            ..Default::default()
+        })
     }
 
     pub fn call(&mut self, fn_index: usize, args: Vec<Value>) -> Result<Option<Value>> {
         todo!()
     }
+
+    fn execute(&mut self) -> Result<()> {
+        loop {
+            let Some(frame) = self.call_stack.front_mut() else {
+                break;
+            };
+
+            frame.pc += 1;
+
+            let Some(inst) = frame.insts.get(frame.pc) else {
+                break;
+            };
+
+            match inst {
+                Instruction::End => {
+                    let Some(Frame { sp, arity, .. }) = self.call_stack.pop_front() else {
+                        bail!("Not found frame");
+                    };
+
+                    match arity {
+                        0 => {
+                            // 戻り値なし
+                            _ = self.stack.split_off(sp);
+                        }
+                        _ => {
+                            // 戻り値あり
+                            let Some(value) = self.stack.pop_front() else {
+                                bail!("Not found return value");
+                            };
+
+                            _ = self.stack.split_off(sp);
+                            self.stack.push_front(value);
+                        }
+                    }
+                }
+                _ => todo!("Not implemented")
+            };
+        }
+
+        Ok(())
+    }
+    }
+
+fn execute_inst_push_local(frame: &mut Frame, stack: &mut LinkedList<Value>, index: u32) -> Result<()> {
+    let Some(value) = frame.locals.get(index as usize) else {
+        bail!("");
+    };
+
+    stack.push_front(value.clone());
+    Ok(())
+}
+
+fn execute_inst_add(_frame: &mut Frame, stack: &mut LinkedList<Value>) -> Result<()> {
+    let (Some(rhs), Some(lhs)) = (stack.pop_front(), stack.pop_front()) else {
+        bail!("Not found enough value in stack");
+    };
+
+    stack.push_front(lhs + rhs);
+    Ok(())
 }
 
 #[cfg(test)]
 mod executor_tests {
+    use std::collections::LinkedList;
+
     use anyhow::Result;
-    use crate::{binary::{instruction::Instruction, module::Module, types::{FuncType, ValueType}}, execution::{runtime::Runtime, store::{FuncInst, Function, InternalFuncInst, Store}, value::Value}};
+    use crate::{binary::{
+        instruction::Instruction, module::Module, 
+        types::{FuncType, ValueType}}, 
+        execution::{runtime::Runtime, 
+            store::{FuncInst, InternalFuncInst, Store}, 
+            value::Value
+        }
+    };
+
+    use super::Frame;
+
+    #[test]
+    fn execute_simplest_fn() -> Result<()> {
+        let wasm = wat::parse_str("(module (func))")?;
+
+        let mut rt = Runtime::instanciate(wasm)?;
+
+        rt.execute()?;
+
+        assert_eq!(0, rt.call_stack.len());
+        assert_eq!(0, rt.stack.len());
+        Ok(())
+    }
 
     #[test]
     fn execute_fn_add() -> Result<()> {
@@ -42,18 +147,54 @@ mod executor_tests {
 
         let expect = InternalFuncInst {
                 fn_type: FuncType { params: vec![ValueType::I32, ValueType::I32], returns: vec![ValueType::I32] },
-                code: Function { 
+                code: crate::execution::store::Function { 
                     locals: vec![], 
                     body: vec![
                         Instruction::LocalGet(0),
                         Instruction::LocalGet(1),
                         Instruction::I32Add,
                         Instruction::End,
-                    ] 
+                    ],
                 },
             }
         ;
         assert_eq!(FuncInst::Internal(expect), store.fns[0]);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_inst_push_locals() -> Result<()> {
+        let mut frame = Frame { 
+            pc: 0, 
+            locals: vec![Value::I32(2)],
+            ..Default::default()
+        };
+        let mut stack = LinkedList::<Value>::new();
+
+        super::execute_inst_push_local(&mut frame, &mut stack, 0)?;
+
+        assert_eq!(1, stack.len());
+        assert_eq!(Some(Value::I32(2)), stack.front().map(|v| v.clone()));
+        Ok(())
+    }
+
+    #[test]
+    fn eval_inst_add_i32() -> Result<()> {
+        let mut frame = Frame { 
+            pc: 0, 
+            locals: vec![Value::I32(5), Value::I32(10)],
+            ..Default::default()
+        };
+        let mut stack = LinkedList::<Value>::new();
+
+        assert_eq!(false, super::execute_inst_add(&mut frame, &mut stack).is_ok());
+
+        super::execute_inst_push_local(&mut frame, &mut stack, 0)?;
+        super::execute_inst_push_local(&mut frame, &mut stack, 1)?;
+        assert_eq!(true, super::execute_inst_add(&mut frame, &mut stack).is_ok());
+
+        assert_eq!(1, stack.len());
+        assert_eq!(Some(Value::I32(15)), stack.front().map(|v| v.clone()));
         Ok(())
     }
 }
