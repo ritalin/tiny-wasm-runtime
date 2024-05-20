@@ -7,6 +7,7 @@ pub enum SectionCode {
     Type = 0x01,
     Function = 0x03,
     Export = 0x07,
+    Import = 0x02,
     Code = 0x0a,
     Custom = 0,
 }

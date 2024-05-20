@@ -3,7 +3,7 @@ use nom::{bytes::complete::{tag, take}, multi::many0, number::complete::{le_u32,
 use nom_leb128::leb128_u32;
 use num_traits::FromPrimitive;
 
-use super::{instruction::Instruction, opcode::Opcode, section::{Function, FunctionLocal}, types::{Export, ExportDesc, FuncType, ValueType}};
+use super::{instruction::Instruction, opcode::Opcode, section::{Function, FunctionLocal}, types::{Export, ExportDesc, FuncType, Import, ImportDesc, ValueType}};
 
 const WASM_MAGIC: &str = "\0asm";
 
@@ -15,11 +15,13 @@ pub struct Module {
     pub fn_section: Option<Vec<u32>>,
     pub code_section: Option<Vec<Function>>,
     pub export_section: Option<Vec<Export>>,
+    pub import_section: Option<Vec<Import>>,
+
 }
 
 impl Default for Module {
     fn default() -> Self {
-        Self { magic: WASM_MAGIC.to_string(), version: 1, type_section: None, fn_section: None, code_section: None, export_section: None }
+        Self { magic: WASM_MAGIC.to_string(), version: 1, type_section: None, fn_section: None, code_section: None, export_section: None, import_section: None }
     }
 }
 
@@ -59,6 +61,10 @@ impl Module {
                         SectionCode::Export => {
                             let (_, exports) = decode_export_section(section_contents)?;
                             module.export_section = Some(exports);
+                        }
+                        SectionCode::Import => {
+                            let (_, imports) = decode_import_section(section_contents)?;
+                            module.import_section = Some(imports);
                         }
                         SectionCode::Custom => {
                             // skip
@@ -200,6 +206,13 @@ fn decode_code_section(input: &[u8]) -> IResult<&[u8], Vec<Function>> {
     Ok((input, fns))
 }
 
+fn decode_name(input: &[u8]) -> IResult<&[u8], String> {
+    let (rest, len) = leb128_u32(input)?;
+    let (rest, name_bytes) = take(len)(rest)?;
+    
+    Ok((rest, String::from_utf8(name_bytes.to_vec()).expect("Invalid utf8 sequence")))
+}
+
 fn decode_export_section(input: &[u8]) -> IResult<&[u8], Vec<Export>> {
     let (input, count) = leb128_u32(input)?;
     let mut exports = vec![];
@@ -207,15 +220,14 @@ fn decode_export_section(input: &[u8]) -> IResult<&[u8], Vec<Export>> {
     let mut remaining = input;
 
     for _ in 0..count {
-        let (rest, len) = leb128_u32(remaining)?;
-        let (rest, name_bytes) = take(len)(rest)?;
+        let (rest, name) = decode_name(remaining)?;
         let (rest, kind) = le_u8(rest)?;
         let (rest, i) = leb128_u32(rest)?;
 
         match kind {
             0 => {
                 exports.push(Export { 
-                    name: String::from_utf8(name_bytes.to_vec()).expect("Invalid utf8 sequence"), 
+                    name, 
                     desc: ExportDesc::Func(i) 
                 });
             }
@@ -228,9 +240,34 @@ fn decode_export_section(input: &[u8]) -> IResult<&[u8], Vec<Export>> {
     Ok((remaining, exports))
 }
 
+fn decode_import_section(input: &[u8]) -> IResult<&[u8], Vec<Import>> {
+    let (input, count) = leb128_u32(input)?;
+    let mut imports = vec![];
+
+    let mut remaining = input;
+
+    for _ in 0..count {
+        let (rest, mod_name) = decode_name(remaining)?;
+        let (rest, field_name) = decode_name(rest)?;
+        let (rest, kind) = le_u8(rest)?;
+        let (rest, i) = leb128_u32(rest)?;
+
+        match kind {
+            0 => {
+                imports.push(Import { mod_name, field_name, desc: ImportDesc::Func(i) })
+            }
+            _ => unimplemented!("Unsupported import kind: {kind:X}")
+        }
+
+        remaining = rest;
+    }
+
+    Ok((remaining, imports))
+}
+
 #[cfg(test)]
 mod decoder_tests {
-    use crate::binary::{instruction::Instruction, module::Module, section::{Function, FunctionLocal, SectionCode}, types::{Export, ExportDesc, FuncType, ValueType}};
+    use crate::binary::{instruction::Instruction, module::Module, section::{Function, FunctionLocal, SectionCode}, types::{Export, ExportDesc, FuncType, Import, ImportDesc, ValueType}};
     use anyhow::Result;
 
     #[test]
@@ -358,6 +395,25 @@ mod decoder_tests {
     }
 
     #[test]
+    fn decode_simplest_fn_imported() -> Result<()> {
+        let wasm = wat::parse_str(r#"(module (func $dummy (import "env" "dummy") (param i32) (result i32)))"#)?;
+        let module = Module::new(&wasm)?;
+
+        let expected = Module {
+            type_section: Some(vec![FuncType { params: vec![ValueType::I32], returns: vec![ValueType::I32] }]),
+            fn_section: None,
+            code_section: None,
+            import_section: Some(vec![
+                Import { mod_name: "env".to_string(), field_name: "dummy".to_string(), desc: ImportDesc::Func(0) }
+            ]),
+            ..Default::default()
+        };
+
+        assert_eq!(expected, module);
+        Ok(())
+    }
+
+    #[test]
     fn decode_section_headers() -> Result<()> {
         assert_eq!((SectionCode::Type, 4u32), super::decode_section_header(&[0x01, 0x04])?.1);
         assert_eq!((SectionCode::Function, 2u32), super::decode_section_header(&[0x03, 0x02])?.1);
@@ -405,6 +461,16 @@ mod decoder_tests {
         ];
 
         assert_eq!(expected, super::decode_export_section(&[0x01, 0x05, 0x64, 0x75, 0x6d, 0x6d, 0x79, 0, 0])?.1);
+        Ok(())
+    }
+
+    #[test]
+    fn decode_import_sections() -> Result<()> {
+        let expected = vec![
+            Import { mod_name: "env".to_string(), field_name: "add".to_string(), desc: ImportDesc::Func(1) }
+        ];
+
+        assert_eq!(expected, super::decode_import_section(&[0x01, 0x03, 0x65, 0x6e, 0x76, 0x03, 0x61, 0x64, 0x64, 0, 1])?.1);
         Ok(())
     }
 }

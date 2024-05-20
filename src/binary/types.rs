@@ -30,3 +30,15 @@ pub struct Export {
     pub name: String,
     pub desc: ExportDesc,
 }
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ImportDesc {
+    Func(u32),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Import {
+    pub mod_name: String,
+    pub field_name: String,
+    pub desc: ImportDesc,
+}
