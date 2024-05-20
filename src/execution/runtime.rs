@@ -100,6 +100,13 @@ impl Runtime {
                 }
                 Instruction::LocalGet(index) => execute_inst_push_local(frame, &mut self.stack, *index)?,
                 Instruction::I32Add => execute_inst_add(frame, &mut self.stack)?,
+                Instruction::Call(index) => {
+                    let fn_index = (*index as usize).clone();
+
+                    if let Some(ret_value) = self.call_with_index(fn_index, vec![])? {
+                        self.stack.push_front(ret_value);
+                    }
+                }
             };
         }
 
@@ -107,8 +114,9 @@ impl Runtime {
     }
 
     fn execute_inst_call(&mut self, next_frame: Frame) -> Result<Option<Value>> {
+        eprintln!("frame.next: {:?}", next_frame);
         let arity = next_frame.arity;
-        self.call_stack.push_back(next_frame);
+        self.call_stack.push_front(next_frame);
 
         match  self.execute() {
             Err(err) => {
@@ -208,6 +216,21 @@ mod executor_tests {
         assert_eq!(Some(Value::I32(5)), instance.call("add", vec![Value::I32(2), Value::I32(3)])?);
         assert_eq!(Some(Value::I32(15)), instance.call("add", vec![Value::I32(10), Value::I32(5)])?);
         assert_eq!(Some(Value::I32(2)), instance.call("add", vec![Value::I32(1), Value::I32(1)])?);
+        Ok(())
+    }
+
+    #[test]
+    fn execute_other_fn() -> Result<()> {
+        let source = r#"
+            (module 
+                (func (export "call_doubler") (param i32) (result i32) (local.get 0) (call $double))
+                (func $double (param i32) (result i32) (local.get 0) (local.get 0) i32.add)
+            )
+        "#;
+        let wasm = wat::parse_bytes(source.as_bytes())?;
+        let mut instance = Runtime::instanciate(wasm)?;
+
+        assert_eq!(Some(Value::I32(42)), instance.call("call_doubler", vec![Value::I32(21)])?);
         Ok(())
     }
 
