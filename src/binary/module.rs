@@ -116,13 +116,11 @@ fn decode_type_section(input: &[u8]) -> IResult<&[u8], Vec<FuncType>> {
     for _ in 0..type_count {
         let(rest, _) = le_u8(input)?; // omit fn sig
         // decode fn parameter types
-        let(rest, count) = leb128_u32(rest)?;
-        let(rest, tys) = take(count)(rest)?;
+        let(rest, tys) = decode_raw_seq(rest)?;
         let(_, params) = many0(decodea_value_type)(tys)?;
         
         // decode fn return types
-        let(rest, count) = leb128_u32(rest)?;
-        let(rest, tys) = take(count)(rest)?;
+        let(rest, tys) = decode_raw_seq(rest)?;
         let(_, returns) = many0(decodea_value_type)(tys)?;
 
         fns.push(FuncType { params, returns });
@@ -227,8 +225,7 @@ fn decode_code_section(input: &[u8]) -> IResult<&[u8], Vec<Function>> {
     let (mut input, count) = leb128_u32(input)?;
 
     for _ in 0..count {
-        let (rest, sz_body) = leb128_u32(input)?;
-        let (rest, contents_body) = take(sz_body)(rest)?;
+        let (rest, contents_body) = decode_raw_seq(input)?;
         let (_, bodies) = decode_function_body(contents_body)?;
 
         fns.push(bodies);
@@ -240,8 +237,7 @@ fn decode_code_section(input: &[u8]) -> IResult<&[u8], Vec<Function>> {
 }
 
 fn decode_name(input: &[u8]) -> IResult<&[u8], String> {
-    let (rest, len) = leb128_u32(input)?;
-    let (rest, name_bytes) = take(len)(rest)?;
+    let (rest, name_bytes) = decode_raw_seq(input)?;
     
     Ok((rest, String::from_utf8(name_bytes.to_vec()).expect("Invalid utf8 sequence")))
 }
