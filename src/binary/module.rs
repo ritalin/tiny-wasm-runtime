@@ -68,6 +68,9 @@ impl Module {
                             let (_, memories) = decode_memory_section(section_contents)?;
                             module.memory_section = Some(memories);
                         }
+                        SectionCode::Data => {
+                            
+                        }
                         SectionCode::Export => {
                             let (_, exports) = decode_export_section(section_contents)?;
                             module.export_section = Some(exports);
@@ -300,11 +303,11 @@ fn decode_memory_section(input: &[u8]) -> IResult<&[u8], Vec<Memory>> {
 
         let (rest, mem) = match has_max {
             0 => {
-                (rest, Memory { initial: initial, maximum: None })
+                (rest, Memory { initial: initial, limit: None })
             }
             1 => {
                 let (rest, max) = leb128_u32(rest)?;
-                (rest, Memory { initial: initial, maximum: Some(max) })
+                (rest, Memory { initial: initial, limit: Some(max) })
             }
             _ => unreachable!(),
         };
@@ -472,8 +475,8 @@ mod decoder_tests {
 
         let expected = Module {
             memory_section: Some(vec![
-                Memory { initial: 2, maximum: Some(3) },
-                Memory { initial: 1, maximum: None },
+                Memory { initial: 2, limit: Some(3) },
+                Memory { initial: 1, limit: None },
             ]),
             ..Default::default()
         };
@@ -550,8 +553,8 @@ mod decoder_tests {
     #[test]
     fn decode_memory_sections() -> Result<()> {
         let expected = vec![
-            Memory { initial: 2, maximum: Some(3) },
-            Memory { initial: 1, maximum: None },
+            Memory { initial: 2, limit: Some(3) },
+            Memory { initial: 1, limit: None },
         ];
         
         assert_eq!(expected, super::decode_memory_section(&[0x02, 0x01, 0x02, 0x03, 0, 0x01, 0x02])?.1);

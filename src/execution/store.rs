@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use crate::binary::{instruction::Instruction, types::{Export, FuncType, ValueType}};
 use anyhow::{bail, Result};
 
+pub const PPAGE_SIZE: usize = (1 << 16) - 1;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
     pub locals: Vec<ValueType>,
@@ -32,11 +34,17 @@ pub enum FuncInst {
 pub struct ExportContainer {
     pub lookup: HashMap<String, Export>,
 }
+#[derive(Default)]
+pub struct MemoryInst {
+    pub data: Vec<u8>,
+    pub limit: Option<u32>,
+}
 
 #[derive(Default)]
 pub struct Store {
     pub fns: Vec<FuncInst>,
     pub exports: ExportContainer,
+    pub memories: Vec<MemoryInst>,
 }
 impl Store {
     pub fn new(module: crate::binary::module::Module) -> Result<Self> {
@@ -47,7 +55,8 @@ impl Store {
 
         let mut fns = vec![];
         let mut exports = ExportContainer::default();
-
+        let mut memories = vec![];
+        
         if let Some(section) = module.code_section {
             for (body, i) in section.iter().zip(decded_fns.into_iter()) {
                 let Some(ref func_types) = module.type_section else {
@@ -87,13 +96,19 @@ impl Store {
                     }
                 }
             }
-            
         }
 
         if let Some(section) = module.export_section {
             exports.lookup = HashMap::from_iter(section.into_iter().map(|x| (x.name.clone(), x)));
         }
 
-        Ok(Self { fns, exports })
+        if let Some(section) = module.memory_section {
+            for mem in section {
+                let sz = mem.initial as usize * PPAGE_SIZE;
+                memories.push(MemoryInst { data: vec![0; sz], limit: mem.limit });
+            }
+        }
+
+        Ok(Self { fns, exports, memories })
     }
 }

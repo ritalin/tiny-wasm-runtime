@@ -46,5 +46,5 @@ pub struct Import {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Memory {
     pub initial: u32,
-    pub maximum: Option<u32>,
+    pub limit: Option<u32>,
 }

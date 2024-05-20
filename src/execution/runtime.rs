@@ -232,7 +232,7 @@ mod executor_tests {
         instruction::Instruction, module::Module, 
         types::{FuncType, ValueType}}, 
         execution::{runtime::Runtime, 
-            store::{ExternalFuncInst, FuncInst, InternalFuncInst, Store}, 
+            store::{ExternalFuncInst, FuncInst, InternalFuncInst, Store, PPAGE_SIZE}, 
             value::Value
         }
     };
@@ -310,15 +310,6 @@ mod executor_tests {
     }
 
     #[test]
-    fn execute_alloc_mem() -> Result<()> {
-        let wasm = wat::parse_str(r#"(module (memory 1) (data (i32.const 42)) (data (i32.const -42)))"#)?;
-        let mut instance = Runtime::instanciate(wasm)?;
-
-        todo!();
-        Ok(())
-    }
-
-    #[test]
     fn init_store() -> Result<()> {
         let wasm = wat::parse_str("(module (func (param i32 i32)(result i32) (local.get 0) (local.get 1) i32.add))")?;
         let module = Module::new(&wasm)?;
@@ -357,6 +348,19 @@ mod executor_tests {
             }
         ;
         assert_eq!(FuncInst::External(expect), store.fns[0]);
+        Ok(())
+    }
+
+    #[test]
+    fn init_store_memory() -> Result<()> {
+        let wasm = wat::parse_str(r#"(module (memory 2) (data (i32.const 42)) (data (i32.const -42)))"#)?;
+        let module = Module::new(&wasm)?;
+        let store = Store::new(module)?;
+
+        assert_eq!(65535, PPAGE_SIZE);
+        assert_eq!(1, store.memories.len());
+        assert_eq!(2 * PPAGE_SIZE, store.memories[0].data.len());
+        assert_eq!(None, store.memories[0].limit);
         Ok(())
     }
 
