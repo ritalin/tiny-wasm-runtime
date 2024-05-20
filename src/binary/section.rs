@@ -6,7 +6,9 @@ use super::{instruction::Instruction, types::ValueType};
 pub enum SectionCode {
     Type = 0x01,
     Function = 0x03,
+    Export = 0x07,
     Code = 0x0a,
+    Custom = 0,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

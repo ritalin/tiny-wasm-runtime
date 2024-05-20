@@ -19,3 +19,14 @@ impl From<u8> for ValueType {
         }
     }
 }
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ExportDesc {
+    Func(u32),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Export {
+    pub name: String,
+    pub desc: ExportDesc,
+}
