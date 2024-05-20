@@ -282,7 +282,6 @@ fn decode_import_section(input: &[u8]) -> IResult<&[u8], Vec<Import>> {
 mod decoder_tests {
     use crate::binary::{instruction::Instruction, module::Module, section::{Function, FunctionLocal, SectionCode}, types::{Export, ExportDesc, FuncType, Import, ImportDesc, ValueType}};
     use anyhow::Result;
-    use num_traits::ToPrimitive;
 
     #[test]
     fn decode_simplest_module() -> Result<()> {

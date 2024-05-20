@@ -104,7 +104,9 @@ impl Runtime {
                         }
                     }
                 }
-                Instruction::LocalGet(index) => execute_inst_push_local(frame, &mut self.stack, *index)?,
+                Instruction::LocalGet(index) => execute_inst_push_from_local(frame, &mut self.stack, *index)?,
+                Instruction::LocalSet(index) => execute_inst_pop_to_local(frame, &mut self.stack, *index)?,
+                Instruction::I32Const(value) => execute_inst_i32_const(frame, &mut self.stack, *value)?,
                 Instruction::I32Add => execute_inst_add(frame, &mut self.stack)?,
                 Instruction::Call(index) => {
                     let fn_index = (*index as usize).clone();
@@ -121,7 +123,6 @@ impl Runtime {
     }
 
     fn execute_inst_call(&mut self, next_frame: Frame) -> Result<Option<Value>> {
-        eprintln!("frame.next: {:?}", next_frame);
         let arity = next_frame.arity;
         self.call_stack.push_front(next_frame);
 
@@ -169,12 +170,17 @@ fn pop_args(stack: &mut LinkedList<Value>, count: usize) -> (Vec<Value>, LinkedL
 }
 
 fn make_frame(stack: &mut LinkedList<Value>, func: &InternalFuncInst) -> (Frame, LinkedList<Value>) {
-    let (locals, next_stack) = pop_args(stack, func.fn_type.params.len());
+    let (args, next_stack) = pop_args(stack, func.fn_type.params.len());
+
+    let locals = func.code.locals.iter().map(|lc| match lc {
+        crate::binary::types::ValueType::I32 => Value::I32(0),
+        crate::binary::types::ValueType::I64 => Value::I64(0),
+    });
 
     let frame = Frame { 
         pc: 0, 
         insts: func.code.body.clone(), 
-        locals,
+        locals: args.into_iter().chain(locals).collect::<Vec<_>>(),
         arity: func.fn_type.returns.len(), 
         sp: next_stack.len() 
     };
@@ -182,12 +188,29 @@ fn make_frame(stack: &mut LinkedList<Value>, func: &InternalFuncInst) -> (Frame,
     (frame, next_stack)
 }
 
-fn execute_inst_push_local(frame: &mut Frame, stack: &mut LinkedList<Value>, index: u32) -> Result<()> {
+fn execute_inst_push_from_local(frame: &mut Frame, stack: &mut LinkedList<Value>, index: u32) -> Result<()> {
     let Some(value) = frame.locals.get(index as usize) else {
         bail!("Not found local var: {index}");
     };
 
     stack.push_front(value.clone());
+    Ok(())
+}
+
+fn execute_inst_pop_to_local(frame: &mut Frame, stack: &mut LinkedList<Value>, index: u32) -> Result<()> {
+    let Some(lc) = frame.locals.get_mut(index as usize) else {
+        bail!("Not found local var: {index}");
+    };
+    let Some(value) = stack.pop_front() else {
+        bail!("Stack is empty")
+    };
+
+    *lc = value;
+    Ok(())
+}
+
+fn execute_inst_i32_const(_frame: &mut Frame, stack: &mut LinkedList<Value>, value: i32) -> Result<()> {
+    stack.push_front(Value::I32(value));
     Ok(())
 }
 
@@ -278,6 +301,15 @@ mod executor_tests {
     }
 
     #[test]
+    fn execute_pop_to_local() -> Result<()> {
+        let wasm = wat::parse_str(r#"(module (func $local_set (export "local_set") (result i32) (local $x i32) (local.set $x (i32.const -42)) (local.get 0)))"#)?;
+        let mut instance = Runtime::instanciate(wasm)?;
+        
+        assert_eq!(Some(Value::I32(-42)), instance.call_with_index(0, vec![])?);
+        Ok(())
+    }
+
+    #[test]
     fn init_store() -> Result<()> {
         let wasm = wat::parse_str("(module (func (param i32 i32)(result i32) (local.get 0) (local.get 1) i32.add))")?;
         let module = Module::new(&wasm)?;
@@ -320,7 +352,7 @@ mod executor_tests {
     }
 
     #[test]
-    fn eval_inst_push_locals() -> Result<()> {
+    fn eval_inst_push_from_locals() -> Result<()> {
         let mut frame = Frame { 
             pc: 0, 
             locals: vec![Value::I32(2)],
@@ -328,7 +360,7 @@ mod executor_tests {
         };
         let mut stack = LinkedList::<Value>::new();
 
-        super::execute_inst_push_local(&mut frame, &mut stack, 0)?;
+        super::execute_inst_push_from_local(&mut frame, &mut stack, 0)?;
 
         assert_eq!(1, stack.len());
         assert_eq!(Some(Value::I32(2)), stack.front().map(|v| v.clone()));
@@ -346,8 +378,8 @@ mod executor_tests {
 
         assert_eq!(false, super::execute_inst_add(&mut frame, &mut stack).is_ok());
 
-        super::execute_inst_push_local(&mut frame, &mut stack, 0)?;
-        super::execute_inst_push_local(&mut frame, &mut stack, 1)?;
+        super::execute_inst_push_from_local(&mut frame, &mut stack, 0)?;
+        super::execute_inst_push_from_local(&mut frame, &mut stack, 1)?;
         assert_eq!(true, super::execute_inst_add(&mut frame, &mut stack).is_ok());
 
         assert_eq!(1, stack.len());
@@ -479,5 +511,42 @@ mod executor_tests {
         assert_eq!(0, rt.call_stack.len());
         assert_eq!(0, rt.stack.len());
         Ok(())
+    }
+
+    #[test]
+    fn eval_inst_local_set() -> Result<()> {
+        let mut frame = Frame { 
+            pc: 0, 
+            locals: vec![Value::I32(0), ],
+            ..Default::default()
+        };
+        let mut stack = LinkedList::<Value>::from([Value::I32(42)]);
+
+        super::execute_inst_pop_to_local(&mut frame, &mut stack, 0)?;
+
+        assert_eq!(0, stack.len());
+        assert_eq!(Value::I32(42), frame.locals[0]);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_inst_i32_const() -> Result<()> {
+        let mut frame = Frame { 
+            pc: 0, 
+            locals: vec![],
+            ..Default::default()
+        };
+        let mut stack = LinkedList::<Value>::new();
+
+        super::execute_inst_i32_const(&mut frame, &mut stack, -123)?;
+
+        assert_eq!(1, stack.len());
+        assert_eq!(Some(Value::I32(-123)), stack.front().map(|v| v.clone()));
+        Ok(())
+    }
+
+    #[test]
+    fn eval_inst_i32_store() -> Result<()> {
+        todo!("13章で実装予定")        
     }
 }
