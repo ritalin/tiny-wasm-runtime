@@ -43,11 +43,11 @@ impl Runtime {
                 break;
             };
 
-            frame.pc += 1;
-
             let Some(inst) = frame.insts.get(frame.pc) else {
                 break;
             };
+
+            frame.pc += 1;
 
             match inst {
                 Instruction::End => {
@@ -71,17 +71,39 @@ impl Runtime {
                         }
                     }
                 }
+                Instruction::LocalGet(index) => execute_inst_push_local(frame, &mut self.stack, *index)?,
+                Instruction::I32Add => execute_inst_add(frame, &mut self.stack)?,
                 _ => todo!("Not implemented")
             };
         }
 
         Ok(())
     }
+
+    fn execute_inst_call(&mut self, next_frame: Frame) -> Result<Option<Value>> {
+        let arity = next_frame.arity;
+        self.call_stack.push_front(next_frame);
+
+        match  self.execute() {
+            Err(err) => {
+                self.call_stack = LinkedList::default();
+                self.stack = LinkedList::default();
+                bail!("Failed to call: {err}");
+            }
+            Ok(_) if arity > 0 => {
+                match self.stack.pop_front() {
+                    None => bail!("Not found return value"),
+                    Some(value) => Ok(Some(value))
+                }
+            }
+            Ok(_) => Ok(None),
+        }
     }
+}
 
 fn execute_inst_push_local(frame: &mut Frame, stack: &mut LinkedList<Value>, index: u32) -> Result<()> {
     let Some(value) = frame.locals.get(index as usize) else {
-        bail!("");
+        bail!("Not found local var: {index}");
     };
 
     stack.push_front(value.clone());
@@ -195,6 +217,46 @@ mod executor_tests {
 
         assert_eq!(1, stack.len());
         assert_eq!(Some(Value::I32(15)), stack.front().map(|v| v.clone()));
+        Ok(())
+    }
+
+    #[test]
+    fn eval_inst_call_noreturn() -> Result<()> {
+        let next_frame = Frame { 
+            locals: vec![Value::I32(42)], 
+            insts: vec![
+                Instruction::End,
+            ], 
+            ..Default::default() 
+        };
+
+        let mut rt = Runtime { store: Store::new(Module::default())?, ..Default::default() };
+        let ret_value = rt.execute_inst_call(next_frame)?;
+
+        assert_eq!(None, ret_value);
+        assert_eq!(0, rt.call_stack.len());
+        assert_eq!(0, rt.stack.len());
+        Ok(())    
+    }
+
+    #[test]
+    fn eval_inst_call() -> Result<()> {
+        let next_frame = Frame { 
+            locals: vec![Value::I32(42)], 
+            insts: vec![
+                Instruction::LocalGet(0),
+                Instruction::End,
+            ], 
+            arity: 1, 
+            ..Default::default() 
+        };
+
+        let mut rt = Runtime { store: Store::new(Module::default())?, ..Default::default() };
+        let ret_value = rt.execute_inst_call(next_frame)?;
+
+        assert_eq!(Some(Value::I32(42)), ret_value);
+        assert_eq!(0, rt.call_stack.len());
+        assert_eq!(0, rt.stack.len());
         Ok(())
     }
 }
