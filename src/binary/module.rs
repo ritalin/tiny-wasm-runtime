@@ -1,6 +1,6 @@
 use crate::binary::section::SectionCode;
 use nom::{bytes::complete::{tag, take}, multi::many0, number::complete::{le_u32, le_u8}, sequence::pair, IResult};
-use nom_leb128::leb128_u32;
+use nom_leb128::{leb128_i32, leb128_u32};
 use num_traits::FromPrimitive;
 
 use super::{instruction::Instruction, opcode::Opcode, section::{Function, FunctionLocal}, types::{Export, ExportDesc, FuncType, Import, ImportDesc, ValueType}};
@@ -154,7 +154,7 @@ fn decode_instruction(input: &[u8]) -> IResult<&[u8], Instruction> {
             Ok((input, Instruction::LocalSet(i)))
         }
         Opcode::I32Const => {
-            let (input, value) = leb128_u32(input)?;
+            let (input, value) = leb128_i32(input)?;
             Ok((input, Instruction::I32Const(value)))
         }
         Opcode::I32Store => {
@@ -465,7 +465,7 @@ mod decoder_tests {
         assert_eq!(Instruction::LocalGet(1), super::decode_instruction(&[0x20, 1])?.1);
         assert_eq!(Instruction::Call(2), super::decode_instruction(&[0x10, 0x02])?.1);
         assert_eq!(Instruction::LocalSet(2), super::decode_instruction(&[0x21, 2])?.1);
-        assert_eq!(Instruction::I32Const(42), super::decode_instruction(&[0x41, 42])?.1);
+        assert_eq!(Instruction::I32Const(-42), super::decode_instruction(&[0x41, -42])?.1);
         assert_eq!(Instruction::I32Store { align: 0xa, offset: 0x7f }, super::decode_instruction(&[0x36, 0xa, 0x7f])?.1);
         
         Ok(())
