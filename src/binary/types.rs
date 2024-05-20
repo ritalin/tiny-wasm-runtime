@@ -42,3 +42,9 @@ pub struct Import {
     pub field_name: String,
     pub desc: ImportDesc,
 }
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Memory {
+    pub initial: u32,
+    pub maximum: Option<u32>,
+}

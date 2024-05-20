@@ -302,10 +302,19 @@ mod executor_tests {
 
     #[test]
     fn execute_pop_to_local() -> Result<()> {
-        let wasm = wat::parse_str(r#"(module (func $local_set (export "local_set") (result i32) (local $x i32) (local.set $x (i32.const -42)) (local.get 0)))"#)?;
+        let wasm = wat::parse_str(r#"(module (func (result i32) (local $x i32) (local.set $x (i32.const -42)) (local.get 0)))"#)?;
         let mut instance = Runtime::instanciate(wasm)?;
         
         assert_eq!(Some(Value::I32(-42)), instance.call_with_index(0, vec![])?);
+        Ok(())
+    }
+
+    #[test]
+    fn execute_alloc_mem() -> Result<()> {
+        let wasm = wat::parse_str(r#"(module (memory 1) (data (i32.const 42)) (data (i32.const -42)))"#)?;
+        let mut instance = Runtime::instanciate(wasm)?;
+
+        todo!();
         Ok(())
     }
 

@@ -3,7 +3,7 @@ use nom::{bytes::complete::{tag, take}, multi::many0, number::complete::{le_u32,
 use nom_leb128::{leb128_i32, leb128_u32};
 use num_traits::FromPrimitive;
 
-use super::{instruction::Instruction, opcode::Opcode, section::{Function, FunctionLocal}, types::{Export, ExportDesc, FuncType, Import, ImportDesc, ValueType}};
+use super::{instruction::Instruction, opcode::Opcode, section::{Function, FunctionLocal}, types::{Export, ExportDesc, FuncType, Import, ImportDesc, Memory, ValueType}};
 
 const WASM_MAGIC: &str = "\0asm";
 
@@ -16,12 +16,18 @@ pub struct Module {
     pub code_section: Option<Vec<Function>>,
     pub export_section: Option<Vec<Export>>,
     pub import_section: Option<Vec<Import>>,
+    pub memory_section: Option<Vec<Memory>>,
 
 }
 
 impl Default for Module {
     fn default() -> Self {
-        Self { magic: WASM_MAGIC.to_string(), version: 1, type_section: None, fn_section: None, code_section: None, export_section: None, import_section: None }
+        Self { 
+            magic: WASM_MAGIC.to_string(), version: 1, 
+            type_section: None, fn_section: None, code_section: None, 
+            export_section: None, import_section: None, 
+            memory_section: None,
+        }
     }
 }
 
@@ -57,6 +63,10 @@ impl Module {
                         SectionCode::Code => {
                             let (_, code) = decode_code_section(section_contents)?;
                             module.code_section = Some(code);
+                        }
+                        SectionCode::Memory => {
+                            let (_, memories) = decode_memory_section(section_contents)?;
+                            module.memory_section = Some(memories);
                         }
                         SectionCode::Export => {
                             let (_, exports) = decode_export_section(section_contents)?;
@@ -278,9 +288,38 @@ fn decode_import_section(input: &[u8]) -> IResult<&[u8], Vec<Import>> {
     Ok((remaining, imports))
 }
 
+fn decode_memory_section(input: &[u8]) -> IResult<&[u8], Vec<Memory>> {
+    let (input, count) = leb128_u32(input)?;
+    let mut memories = vec![];
+
+    let mut remaining = input;
+
+    for _ in 0..count {
+        let (rest, has_max) = le_u8(remaining)?;
+        let (rest, initial) = leb128_u32(rest)?;
+
+        let (rest, mem) = match has_max {
+            0 => {
+                (rest, Memory { initial: initial, maximum: None })
+            }
+            1 => {
+                let (rest, max) = leb128_u32(rest)?;
+                (rest, Memory { initial: initial, maximum: Some(max) })
+            }
+            _ => unreachable!(),
+        };
+
+        memories.push(mem);
+
+        remaining = rest;
+    }
+
+    Ok((remaining, memories))
+}
+
 #[cfg(test)]
 mod decoder_tests {
-    use crate::binary::{instruction::Instruction, module::Module, section::{Function, FunctionLocal, SectionCode}, types::{Export, ExportDesc, FuncType, Import, ImportDesc, ValueType}};
+    use crate::binary::{instruction::Instruction, module::Module, section::{Function, FunctionLocal, SectionCode}, types::{Export, ExportDesc, FuncType, Import, ImportDesc, Memory, ValueType}};
     use anyhow::Result;
 
     #[test]
@@ -427,6 +466,23 @@ mod decoder_tests {
     }
 
     #[test]
+    fn decode_alloc_memory() -> Result<()> {
+        let wasm = wat::parse_str(r#"(module (memory 2 3)(memory 1))"#)?;
+        let module = Module::new(&wasm)?;
+
+        let expected = Module {
+            memory_section: Some(vec![
+                Memory { initial: 2, maximum: Some(3) },
+                Memory { initial: 1, maximum: None },
+            ]),
+            ..Default::default()
+        };
+
+        assert_eq!(expected, module);
+        Ok(())
+    }
+
+    #[test]
     fn decode_section_headers() -> Result<()> {
         assert_eq!((SectionCode::Type, 4u32), super::decode_section_header(&[0x01, 0x04])?.1);
         assert_eq!((SectionCode::Function, 2u32), super::decode_section_header(&[0x03, 0x02])?.1);
@@ -488,6 +544,17 @@ mod decoder_tests {
         ];
 
         assert_eq!(expected, super::decode_import_section(&[0x01, 0x03, 0x65, 0x6e, 0x76, 0x03, 0x61, 0x64, 0x64, 0, 1])?.1);
+        Ok(())
+    }
+
+    #[test]
+    fn decode_memory_sections() -> Result<()> {
+        let expected = vec![
+            Memory { initial: 2, maximum: Some(3) },
+            Memory { initial: 1, maximum: None },
+        ];
+        
+        assert_eq!(expected, super::decode_memory_section(&[0x02, 0x01, 0x02, 0x03, 0, 0x01, 0x02])?.1);
         Ok(())
     }
 }
