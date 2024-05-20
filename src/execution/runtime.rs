@@ -1,10 +1,12 @@
-use std::collections::LinkedList;
+use std::collections::{HashMap, LinkedList};
 
 use anyhow::{bail, Result};
 
 use crate::binary::{instruction::Instruction, module::Module, types::ExportDesc};
 
-use super::{store::{FuncInst, InternalFuncInst, Store}, value::Value};
+use super::{store::{ExternalFuncInst, FuncInst, InternalFuncInst, Store}, value::Value};
+
+type ExtFn = Box<dyn FnMut(&mut Store, Vec<Value>) -> Result<Option<Value>>>;
 
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct Frame {
@@ -20,6 +22,7 @@ pub struct Runtime {
     pub store: Store,
     pub stack: LinkedList<Value>,
     pub call_stack: LinkedList<Frame>,
+    pub import_fns: HashMap<(String, String), ExtFn>,
 }
 
 impl Runtime {
@@ -61,7 +64,9 @@ impl Runtime {
 
                 self.execute_inst_call(frame)
             }
-            _ => todo!(),
+            FuncInst::External(func) => {
+                self.execute_ext_call(func.clone())
+            }
         }
     }
 
@@ -134,11 +139,36 @@ impl Runtime {
             Ok(_) => Ok(None),
         }
     }
+
+    fn execute_ext_call(&mut self, func: ExternalFuncInst) -> Result<Option<Value>> {
+        let Some(call) = self.import_fns.get_mut(&(func.mod_name.to_string(), func.fn_name.to_string())) else {
+            bail!("Ext function is not found");
+        };
+
+        let (args, next_stack) = pop_args(&mut self.stack, func.fn_type.params.len());
+        self.stack = next_stack;
+
+        call(&mut self.store, args)
+    }
+
+    pub fn add_import(&mut self, mod_name: impl Into<String>, fn_name: impl Into<String>, 
+        call: impl FnMut(&mut Store, Vec<Value>) -> Result<Option<Value>> + 'static) -> Result<()> 
+    {
+        self.import_fns.insert((mod_name.into(), fn_name.into()), Box::new(call));
+
+        Ok(())
+    }
+}
+
+fn pop_args(stack: &mut LinkedList<Value>, count: usize) -> (Vec<Value>, LinkedList<Value>) {
+    let next_stack = stack.split_off(count);
+    let args = stack.iter().map(Value::clone).rev().collect::<Vec<_>>();
+
+    (args, next_stack)
 }
 
 fn make_frame(stack: &mut LinkedList<Value>, func: &InternalFuncInst) -> (Frame, LinkedList<Value>) {
-    let next_stack = stack.split_off(func.fn_type.params.len());
-    let locals = stack.iter().map(Value::clone).rev().collect::<Vec<_>>();
+    let (locals, next_stack) = pop_args(stack, func.fn_type.params.len());
 
     let frame = Frame { 
         pc: 0, 
@@ -232,6 +262,17 @@ mod executor_tests {
         let mut instance = Runtime::instanciate(wasm)?;
 
         assert_eq!(Some(Value::I32(42)), instance.call("call_doubler", vec![Value::I32(21)])?);
+        Ok(())
+    }
+
+    #[test]
+    fn execute_import_fn() -> Result<()> {
+        let wasm = wat::parse_bytes(r#"(module (func $double (import "env" "double_ext") (param i32) (result i32)))"#.as_bytes())?;
+        let mut instance = Runtime::instanciate(wasm)?;
+
+        instance.add_import("env", "double_ext", |_, args| Ok(Some(args[0] + args[0])))?;
+
+        assert_eq!(Some(Value::I32(198)), instance.call_with_index(0, vec![Value::I32(99)])?);
         Ok(())
     }
 
