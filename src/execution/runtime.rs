@@ -113,6 +113,7 @@ impl Runtime {
                         self.stack.push_front(ret_value);
                     }
                 }
+                _ => todo!()
             };
         }
 

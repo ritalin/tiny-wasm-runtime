@@ -149,6 +149,19 @@ fn decode_instruction(input: &[u8]) -> IResult<&[u8], Instruction> {
             let (input, i) = leb128_u32(input)?;
             Ok((input, Instruction::LocalGet(i)))
         }
+        Opcode::LocalSet => {
+            let (input, i) = leb128_u32(input)?;
+            Ok((input, Instruction::LocalSet(i)))
+        }
+        Opcode::I32Const => {
+            let (input, value) = leb128_u32(input)?;
+            Ok((input, Instruction::I32Const(value)))
+        }
+        Opcode::I32Store => {
+            let (input, align) = leb128_u32(input)?;
+            let (input, offset) = leb128_u32(input)?;
+            Ok((input, Instruction::I32Store { align, offset }))
+        }
         Opcode::I32Add => Ok((input, Instruction::I32Add)),
         Opcode::Call => {
             let (input, i) = leb128_u32(input)?;
@@ -451,6 +464,10 @@ mod decoder_tests {
         assert_eq!(Instruction::I32Add, super::decode_instruction(&[0x6A])?.1);
         assert_eq!(Instruction::LocalGet(1), super::decode_instruction(&[0x20, 1])?.1);
         assert_eq!(Instruction::Call(2), super::decode_instruction(&[0x10, 0x02])?.1);
+        assert_eq!(Instruction::LocalSet(2), super::decode_instruction(&[0x21, 2])?.1);
+        assert_eq!(Instruction::I32Const(42), super::decode_instruction(&[0x41, 42])?.1);
+        assert_eq!(Instruction::I32Store { align: 0xa, offset: 0x7f }, super::decode_instruction(&[0x36, 0xa, 0x7f])?.1);
+        
         Ok(())
     }
 
