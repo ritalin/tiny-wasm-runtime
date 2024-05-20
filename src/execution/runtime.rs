@@ -4,9 +4,9 @@ use anyhow::{bail, Result};
 
 use crate::binary::{instruction::Instruction, module::Module};
 
-use super::{store::Store, value::Value};
+use super::{store::{InternalFuncInst, Store}, value::Value};
 
-#[derive(Default)]
+#[derive(Default, Debug, PartialEq, Eq)]
 pub struct Frame {
     pub pc: usize,
     pub insts: Vec<Instruction>,
@@ -58,7 +58,7 @@ impl Runtime {
                     match arity {
                         0 => {
                             // 戻り値なし
-                            _ = self.stack.split_off(sp);
+                            self.stack = self.stack.split_off(sp);
                         }
                         _ => {
                             // 戻り値あり
@@ -66,7 +66,7 @@ impl Runtime {
                                 bail!("Not found return value");
                             };
 
-                            _ = self.stack.split_off(sp);
+                            self.stack = self.stack.split_off(sp);
                             self.stack.push_front(value);
                         }
                     }
@@ -82,7 +82,7 @@ impl Runtime {
 
     fn execute_inst_call(&mut self, next_frame: Frame) -> Result<Option<Value>> {
         let arity = next_frame.arity;
-        self.call_stack.push_front(next_frame);
+        self.call_stack.push_back(next_frame);
 
         match  self.execute() {
             Err(err) => {
@@ -99,6 +99,21 @@ impl Runtime {
             Ok(_) => Ok(None),
         }
     }
+}
+
+fn make_frame(stack: &mut LinkedList<Value>, func: &InternalFuncInst) -> (Frame, LinkedList<Value>) {
+    let next_stack = stack.split_off(func.fn_type.params.len());
+    let locals = stack.iter().map(Value::clone).rev().collect::<Vec<_>>();
+
+    let frame = Frame { 
+        pc: 0, 
+        insts: func.code.body.clone(), 
+        locals,
+        arity: func.fn_type.returns.len(), 
+        sp: next_stack.len() 
+    };
+
+    (frame, next_stack)
 }
 
 fn execute_inst_push_local(frame: &mut Frame, stack: &mut LinkedList<Value>, index: u32) -> Result<()> {
@@ -217,6 +232,92 @@ mod executor_tests {
 
         assert_eq!(1, stack.len());
         assert_eq!(Some(Value::I32(15)), stack.front().map(|v| v.clone()));
+        Ok(())
+    }
+
+    #[test]
+    fn make_frame_of_without_return() -> Result<()> {
+        let wasm = wat::parse_str("(module (func))")?;
+        let module = Module::new(&wasm)?;
+        let store = Store::new(module)?;
+
+        let mut stack = LinkedList::<Value>::new();
+
+        let Some(FuncInst::Internal(fn_decl)) = store.fns.get(0) else {
+            unreachable!();
+        };
+
+        let expect = Frame { 
+            insts: vec![
+                Instruction::End,
+            ], 
+            ..Default::default() 
+        };
+
+        let (frame, next_stack) = super::make_frame(&mut stack, fn_decl);
+        assert_eq!(expect, frame);
+        assert_eq!(0, next_stack.len());
+
+        Ok(())
+    }
+
+    #[test]
+    fn make_frame_of_with_return() -> Result<()> {
+        let wasm = wat::parse_str("(module (func (param i32) (result i32) (local.get 0)))")?;
+        let module = Module::new(&wasm)?;
+        let store = Store::new(module)?;
+
+        let mut stack = LinkedList::from([Value::I32(42)]);
+
+        let Some(FuncInst::Internal(fn_decl)) = store.fns.get(0) else {
+            unreachable!();
+        };
+
+        let expect = Frame { 
+            insts: vec![
+                Instruction::LocalGet(0),
+                Instruction::End,
+            ], 
+            locals: vec![Value::I32(42)],
+            arity: 1,
+            ..Default::default() 
+        };
+
+        let (frame, next_stack) = super::make_frame(&mut stack, fn_decl);
+        assert_eq!(expect, frame);
+        assert_eq!(0, next_stack.len());
+
+        Ok(())
+    }
+
+    #[test]
+    fn make_frame_fn_add() -> Result<()> {
+        let wasm = wat::parse_str("(module (func (param i32 i32)(result i32) (local.get 0) (local.get 1) i32.add))")?;
+        let module = Module::new(&wasm)?;
+        let store = Store::new(module)?;
+
+        let mut stack = LinkedList::from([Value::I32(10), Value::I32(5)]);
+
+        let Some(FuncInst::Internal(fn_decl)) = store.fns.get(0) else {
+            unreachable!();
+        };
+
+        let expect = Frame { 
+            insts: vec![
+                Instruction::LocalGet(0),
+                Instruction::LocalGet(1),
+                Instruction::I32Add,
+                Instruction::End,
+            ], 
+            locals: vec![Value::I32(5), Value::I32(10)],
+            arity: 1,
+            ..Default::default() 
+        };
+
+        let (frame, next_stack) = super::make_frame(&mut stack, fn_decl);
+        assert_eq!(expect, frame);
+        assert_eq!(0, next_stack.len());
+
         Ok(())
     }
 
