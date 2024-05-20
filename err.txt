@@ -1,0 +1,26 @@
+   Compiling tiny-wasm-runtime v0.1.0 (/Users/tamurakazuhiko/work/test/chisel/_w/tiny-wasm)
+warning: unreachable pattern
+  --> src/binary/module.rs:61:25
+   |
+61 |                         _ => unreachable!()
+   |                         ^
+   |
+   = note: `#[warn(unreachable_patterns)]` on by default
+
+warning: `tiny-wasm-runtime` (lib) generated 1 warning
+warning: `tiny-wasm-runtime` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.92s
+     Running unittests src/lib.rs (target/debug/deps/tiny_wasm_runtime-bddaefe718d94e8c)
+[1, 4, 1, 96, 0, 0, 3, 2, 1, 0, 10, 4, 1, 2, 0, 11]
+SectionCode: Type, size: 4
+[3, 2, 1, 0, 10, 4, 1, 2, 0, 11]
+SectionCode: Function, size: 2
+In:SectionCode::Function
+[10, 4, 1, 2, 0, 11]
+SectionCode: Code, size: 4
+thread 'binary::module::tests::decode_simplest_fn' panicked at src/binary/module.rs:137:9:
+assertion `left == right` failed
+  left: Module { magic: "\0asm", version: 1, type_section: Some([FuncType { params: [], results: [] }]), fn_section: Some([0]), code_section: Some([Function { locals: [], code: [End] }]) }
+ right: Module { magic: "\0asm", version: 1, type_section: Some([]), fn_section: Some([0]), code_section: Some([Function { locals: [], code: [End] }]) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: test failed, to rerun pass `--lib`

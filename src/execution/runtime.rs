@@ -1,8 +1,8 @@
-use std::{collections::LinkedList};
+use std::collections::LinkedList;
 
 use anyhow::{bail, Result};
 
-use crate::binary::{instruction::Instruction, module::Module};
+use crate::binary::{instruction::Instruction, module::Module, types::ExportDesc};
 
 use super::{store::{FuncInst, InternalFuncInst, Store}, value::Value};
 
@@ -33,7 +33,19 @@ impl Runtime {
         })
     }
 
-    pub fn call(&mut self, fn_index: usize, args: Vec<Value>) -> Result<Option<Value>> {
+    pub fn call(&mut self, name: impl Into<String>, args: Vec<Value>) -> Result<Option<Value>> {
+        let Some(export_fn) = self.store.exports.lookup.get(&name.into()) else {
+            bail!("Not found exported fn");
+        };
+
+        match export_fn.desc {
+            ExportDesc::Func(index) => {
+                self.call_with_index(index as usize, args)
+            }
+        }
+    }
+
+    pub fn call_with_index(&mut self, fn_index: usize, args: Vec<Value>) -> Result<Option<Value>> {
         let Some(func) = self.store.fns.get(fn_index) else {
             bail!("Fundtion is not found");
         };
@@ -182,9 +194,20 @@ mod executor_tests {
         let wasm = wat::parse_str("(module (func (param i32 i32)(result i32) (local.get 0) (local.get 1) i32.add))")?;
         let mut instance = Runtime::instanciate(wasm)?;
 
-        assert_eq!(Some(Value::I32(5)), instance.call(0, vec![Value::I32(2), Value::I32(3)])?);
-        assert_eq!(Some(Value::I32(15)), instance.call(0, vec![Value::I32(10), Value::I32(5)])?);
-        assert_eq!(Some(Value::I32(2)), instance.call(0, vec![Value::I32(1), Value::I32(1)])?);
+        assert_eq!(Some(Value::I32(5)), instance.call_with_index(0, vec![Value::I32(2), Value::I32(3)])?);
+        assert_eq!(Some(Value::I32(15)), instance.call_with_index(0, vec![Value::I32(10), Value::I32(5)])?);
+        assert_eq!(Some(Value::I32(2)), instance.call_with_index(0, vec![Value::I32(1), Value::I32(1)])?);
+        Ok(())
+    }
+
+    #[test]
+    fn execute_fn_add_by_name() -> Result<()> {
+        let wasm = wat::parse_str(r#"(module (export "add" (func $add)) (func $add (param i32 i32)(result i32) (local.get 0) (local.get 1) i32.add))"#)?;
+        let mut instance = Runtime::instanciate(wasm)?;
+
+        assert_eq!(Some(Value::I32(5)), instance.call("add", vec![Value::I32(2), Value::I32(3)])?);
+        assert_eq!(Some(Value::I32(15)), instance.call("add", vec![Value::I32(10), Value::I32(5)])?);
+        assert_eq!(Some(Value::I32(2)), instance.call("add", vec![Value::I32(1), Value::I32(1)])?);
         Ok(())
     }
 

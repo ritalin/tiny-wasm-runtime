@@ -1,4 +1,6 @@
-use crate::binary::{instruction::Instruction, types::{FuncType, ValueType}};
+use std::collections::HashMap;
+
+use crate::binary::{instruction::Instruction, types::{Export, FuncType, ValueType}};
 use anyhow::{bail, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,8 +21,14 @@ pub enum FuncInst {
 }
 
 #[derive(Default)]
+pub struct ExportContainer {
+    pub lookup: HashMap<String, Export>,
+}
+
+#[derive(Default)]
 pub struct Store {
     pub fns: Vec<FuncInst>,
+    pub exports: ExportContainer,
 }
 impl Store {
     pub fn new(module: crate::binary::module::Module) -> Result<Self> {
@@ -30,6 +38,7 @@ impl Store {
         };
 
         let mut fns = vec![];
+        let mut exports = ExportContainer::default();
 
         if let Some(section) = module.code_section {
             for (body, i) in section.iter().zip(decded_fns.into_iter()) {
@@ -53,6 +62,10 @@ impl Store {
             }
         }
 
-        Ok(Self { fns })
+        if let Some(section) = module.export_section {
+            exports.lookup = HashMap::from_iter(section.into_iter().map(|x| (x.name.clone(), x)));
+        }
+
+        Ok(Self { fns, exports })
     }
 }
