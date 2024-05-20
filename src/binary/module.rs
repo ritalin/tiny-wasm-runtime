@@ -17,6 +17,7 @@ pub struct Module {
     pub export_section: Option<Vec<Export>>,
     pub import_section: Option<Vec<Import>>,
     pub memory_section: Option<Vec<Memory>>,
+    pub data_section: Option<Vec<Data>>,
 
 }
 
@@ -26,7 +27,7 @@ impl Default for Module {
             magic: WASM_MAGIC.to_string(), version: 1, 
             type_section: None, fn_section: None, code_section: None, 
             export_section: None, import_section: None, 
-            memory_section: None,
+            memory_section: None, data_section: None,
         }
     }
 }
@@ -69,7 +70,8 @@ impl Module {
                             module.memory_section = Some(memories);
                         }
                         SectionCode::Data => {
-                            
+                            let (_, enties) = decode_data_section(section_contents)?;
+                            module.data_section = Some(enties);                            
                         }
                         SectionCode::Export => {
                             let (_, exports) = decode_export_section(section_contents)?;
@@ -507,6 +509,26 @@ mod decoder_tests {
             memory_section: Some(vec![
                 Memory { initial: 2, limit: Some(3) },
                 Memory { initial: 1, limit: None },
+            ]),
+            ..Default::default()
+        };
+
+        assert_eq!(expected, module);
+        Ok(())
+    }
+
+    #[test]
+    fn decode_const_data() -> Result<()> {
+        let wasm = wat::parse_str(r#"(module (memory 1) (data (i32.const 0) "Hello") (data (i32.const 5) "World\n"))"#)?;
+        let module = Module::new(&wasm)?;
+
+        let expected = Module {
+            memory_section: Some(vec![
+                Memory { initial: 1, limit: None }
+            ]),
+            data_section: Some(vec![
+                Data { page: 0, offset: 0, bytes: Vec::from("Hello") },
+                Data { page: 0, offset: 5, bytes: Vec::from("World\n") },
             ]),
             ..Default::default()
         };
