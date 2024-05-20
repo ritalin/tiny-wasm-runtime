@@ -16,8 +16,16 @@ pub struct InternalFuncInst {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalFuncInst {
+    pub fn_type: FuncType,
+    pub mod_name: String,
+    pub fn_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FuncInst {
     Internal(InternalFuncInst),
+    External(ExternalFuncInst),
 }
 
 #[derive(Default)]
@@ -60,6 +68,26 @@ impl Store {
                     code: Function { locals, body: body.code.clone() }
                 }));
             }
+        }
+
+        if let Some(section) = module.import_section {
+            for import in section {
+                match import.desc {
+                    crate::binary::types::ImportDesc::Func(index) => {   
+                        let Some(ref func_types) = module.type_section else {
+                            bail!("Not found type section")
+                        };
+                        let Some(fn_type) = func_types.get(index as usize) else {
+                            bail!("Not found func type in section")
+                        };
+
+                        fns.push(FuncInst::External(ExternalFuncInst { 
+                            fn_type: fn_type.clone(), mod_name: import.mod_name, fn_name: import.field_name, 
+                        }))
+                    }
+                }
+            }
+            
         }
 
         if let Some(section) = module.export_section {

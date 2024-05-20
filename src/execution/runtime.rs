@@ -61,6 +61,7 @@ impl Runtime {
 
                 self.execute_inst_call(frame)
             }
+            _ => todo!(),
         }
     }
 
@@ -177,7 +178,7 @@ mod executor_tests {
         instruction::Instruction, module::Module, 
         types::{FuncType, ValueType}}, 
         execution::{runtime::Runtime, 
-            store::{FuncInst, InternalFuncInst, Store}, 
+            store::{ExternalFuncInst, FuncInst, InternalFuncInst, Store}, 
             value::Value
         }
     };
@@ -243,19 +244,36 @@ mod executor_tests {
         assert_eq!(1, store.fns.len());
 
         let expect = InternalFuncInst {
+            fn_type: FuncType { params: vec![ValueType::I32, ValueType::I32], returns: vec![ValueType::I32] },
+            code: crate::execution::store::Function { 
+                locals: vec![], 
+                body: vec![
+                    Instruction::LocalGet(0),
+                    Instruction::LocalGet(1),
+                    Instruction::I32Add,
+                    Instruction::End,
+                ],
+            },
+        };
+        assert_eq!(FuncInst::Internal(expect), store.fns[0]);
+        Ok(())
+    }
+
+    #[test]
+    fn init_store_with_ext_fn() -> Result<()> {
+        let wasm = wat::parse_str(r#"(module (func $dummy (import "env" "dummy")(param i32 i32)(result i32)))"#)?;
+        let module = Module::new(&wasm)?;
+        let store = Store::new(module)?;
+
+        assert_eq!(1, store.fns.len());
+
+        let expect = ExternalFuncInst {
                 fn_type: FuncType { params: vec![ValueType::I32, ValueType::I32], returns: vec![ValueType::I32] },
-                code: crate::execution::store::Function { 
-                    locals: vec![], 
-                    body: vec![
-                        Instruction::LocalGet(0),
-                        Instruction::LocalGet(1),
-                        Instruction::I32Add,
-                        Instruction::End,
-                    ],
-                },
+                mod_name: "env".to_string(),
+                fn_name: "dummy".to_string()
             }
         ;
-        assert_eq!(FuncInst::Internal(expect), store.fns[0]);
+        assert_eq!(FuncInst::External(expect), store.fns[0]);
         Ok(())
     }
 
