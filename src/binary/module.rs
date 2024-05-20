@@ -55,7 +55,6 @@ impl Module {
                             let (_, code) = decode_code_section(section_contents)?;
                             module.code_section = Some(code);
                         }
-                        _ => unreachable!()
                     }
                     remaining = rest;
                 }

@@ -4,7 +4,7 @@ use anyhow::{bail, Result};
 
 use crate::binary::{instruction::Instruction, module::Module};
 
-use super::{store::{InternalFuncInst, Store}, value::Value};
+use super::{store::{FuncInst, InternalFuncInst, Store}, value::Value};
 
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct Frame {
@@ -34,7 +34,22 @@ impl Runtime {
     }
 
     pub fn call(&mut self, fn_index: usize, args: Vec<Value>) -> Result<Option<Value>> {
-        todo!()
+        let Some(func) = self.store.fns.get(fn_index) else {
+            bail!("Fundtion is not found");
+        };
+
+        for arg in args {
+            self.stack.push_front(arg);
+        }
+
+        match func {
+            FuncInst::Internal(func) => {
+                let (frame, next_stack) = make_frame(&mut self.stack, func);
+                self.stack = next_stack;
+
+                self.execute_inst_call(frame)
+            }
+        }
     }
 
     fn execute(&mut self) -> Result<()> {
@@ -73,7 +88,6 @@ impl Runtime {
                 }
                 Instruction::LocalGet(index) => execute_inst_push_local(frame, &mut self.stack, *index)?,
                 Instruction::I32Add => execute_inst_add(frame, &mut self.stack)?,
-                _ => todo!("Not implemented")
             };
         }
 

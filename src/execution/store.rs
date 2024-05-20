@@ -46,10 +46,10 @@ impl Store {
                     .collect::<Vec<_>>()
                 ;
 
-                fns.push(FuncInst::Internal((InternalFuncInst { 
+                fns.push(FuncInst::Internal(InternalFuncInst { 
                     fn_type: fn_type.clone(), 
                     code: Function { locals, body: body.code.clone() }
-                })));
+                }));
             }
         }
 
