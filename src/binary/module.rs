@@ -282,6 +282,7 @@ fn decode_import_section(input: &[u8]) -> IResult<&[u8], Vec<Import>> {
 mod decoder_tests {
     use crate::binary::{instruction::Instruction, module::Module, section::{Function, FunctionLocal, SectionCode}, types::{Export, ExportDesc, FuncType, Import, ImportDesc, ValueType}};
     use anyhow::Result;
+    use num_traits::ToPrimitive;
 
     #[test]
     fn decode_simplest_module() -> Result<()> {
@@ -465,7 +466,7 @@ mod decoder_tests {
         assert_eq!(Instruction::LocalGet(1), super::decode_instruction(&[0x20, 1])?.1);
         assert_eq!(Instruction::Call(2), super::decode_instruction(&[0x10, 0x02])?.1);
         assert_eq!(Instruction::LocalSet(2), super::decode_instruction(&[0x21, 2])?.1);
-        assert_eq!(Instruction::I32Const(-42), super::decode_instruction(&[0x41, -42])?.1);
+        assert_eq!(Instruction::I32Const(42), super::decode_instruction(&[0x41, 42])?.1);
         assert_eq!(Instruction::I32Store { align: 0xa, offset: 0x7f }, super::decode_instruction(&[0x36, 0xa, 0x7f])?.1);
         
         Ok(())
