@@ -3,7 +3,7 @@ use nom::{bytes::complete::{tag, take}, multi::many0, number::complete::{le_u32,
 use nom_leb128::{leb128_i32, leb128_u32};
 use num_traits::FromPrimitive;
 
-use super::{instruction::Instruction, opcode::Opcode, section::{Function, FunctionLocal}, types::{Export, ExportDesc, FuncType, Import, ImportDesc, Memory, ValueType}};
+use super::{instruction::Instruction, opcode::Opcode, section::{Function, FunctionLocal}, types::{Data, Export, ExportDesc, FuncType, Import, ImportDesc, Memory, ValueType}};
 
 const WASM_MAGIC: &str = "\0asm";
 
@@ -183,6 +183,13 @@ fn decode_instruction(input: &[u8]) -> IResult<&[u8], Instruction> {
     }
 }
 
+fn decode_raw_seq(input: &[u8]) -> IResult<&[u8], &[u8]> {
+    let (rest, sz) = leb128_u32(input)?;
+    let (rest, bytes) = take(sz)(rest)?;
+
+    Ok((rest, bytes))
+}
+
 fn decode_function_body(input: &[u8]) -> IResult<&[u8], Function> {
     let mut locals = vec![];
 
@@ -320,9 +327,36 @@ fn decode_memory_section(input: &[u8]) -> IResult<&[u8], Vec<Memory>> {
     Ok((remaining, memories))
 }
 
+fn decode_expr(input: &[u8]) -> IResult<&[u8], u32> {
+    let (rest, _) = leb128_u32(input)?;
+    let (rest, offset) = leb128_u32(rest)?;
+    let (rest, _) = leb128_u32(rest)?;
+
+    Ok((rest, offset))
+}
+
+fn decode_data_section(input: &[u8]) -> IResult<&[u8], Vec<Data>> {
+    let (input, count) = leb128_u32(input)?;
+    let mut entries = vec![];
+
+    let mut remaining = input;
+
+    for _ in 0..count {
+        let (rest, page) = leb128_u32(remaining)?;
+        let (rest, offset) = decode_expr(rest)?;
+        let (rest, bytes) = decode_raw_seq(rest)?;
+
+        entries.push(Data { page, offset, bytes: Vec::from(bytes) });
+
+        remaining = rest;
+    }
+
+    Ok((remaining, entries))
+}
+
 #[cfg(test)]
 mod decoder_tests {
-    use crate::binary::{instruction::Instruction, module::Module, section::{Function, FunctionLocal, SectionCode}, types::{Export, ExportDesc, FuncType, Import, ImportDesc, Memory, ValueType}};
+    use crate::binary::{instruction::Instruction, module::Module, section::{Function, FunctionLocal, SectionCode}, types::{Data, Export, ExportDesc, FuncType, Import, ImportDesc, Memory, ValueType}};
     use anyhow::Result;
 
     #[test]
@@ -558,6 +592,16 @@ mod decoder_tests {
         ];
         
         assert_eq!(expected, super::decode_memory_section(&[0x02, 0x01, 0x02, 0x03, 0, 0x01, 0x02])?.1);
+        Ok(())
+    }
+
+    #[test]
+    fn decode_data_sections() -> Result<()> {
+        let expected = vec![
+            Data { page: 0, offset: 0, bytes: Vec::from("Hello\n") }
+        ];
+
+        assert_eq!(expected, super::decode_data_section(&[0x01, 0, 0x41, 0, 0x0b, 0x06, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x0a, 0x0d])?.1);
         Ok(())
     }
 }

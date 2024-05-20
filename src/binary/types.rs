@@ -48,3 +48,10 @@ pub struct Memory {
     pub initial: u32,
     pub limit: Option<u32>,
 }
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Data {
+    pub page: u32,
+    pub offset: u32,
+    pub bytes: Vec<u8>,
+}
