@@ -109,6 +109,17 @@ impl Store {
             }
         }
 
+        if let Some(section) = module.data_section {
+            for data in section {
+                let Some(mem) = memories.get_mut(data.page as usize) else {
+                    bail!("Memory page is not found");
+                };
+
+                let offset = data.offset as usize;
+                mem.data[offset..offset + data.bytes.len()].copy_from_slice(&data.bytes);
+            }
+        }
+
         Ok(Self { fns, exports, memories })
     }
 }

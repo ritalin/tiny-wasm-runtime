@@ -365,6 +365,16 @@ mod executor_tests {
     }
 
     #[test]
+    fn init_store_const_data() -> Result<()> {
+        let wasm = wat::parse_str(r#"(module (memory 1) (data (i32.const 0) "Hello") (data (i32.const 5) "World\n"))"#)?;
+        let module = Module::new(&wasm)?;
+        let store = Store::new(module)?;
+
+        assert_eq!(b"HelloWorld\n", &store.memories[0].data[0..11]);
+        Ok(())
+    }
+
+    #[test]
     fn eval_inst_push_from_locals() -> Result<()> {
         let mut frame = Frame { 
             pc: 0, 
