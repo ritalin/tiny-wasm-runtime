@@ -16,3 +16,12 @@ impl std::ops::Add for Value {
         }
     }
 }
+
+impl From<Value> for i32 {
+    fn from(value: Value) -> Self {
+        match value {
+            Value::I32(v) => v,
+            _ => unimplemented!("Unsupported feature"),
+        }
+    }
+}

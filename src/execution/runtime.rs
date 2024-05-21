@@ -1,10 +1,11 @@
 use std::collections::{HashMap, LinkedList};
 
 use anyhow::{bail, Result};
+use num_traits::ToBytes;
 
 use crate::binary::{instruction::Instruction, module::Module, types::ExportDesc};
 
-use super::{store::{ExternalFuncInst, FuncInst, InternalFuncInst, Store}, value::Value};
+use super::{store::{ExternalFuncInst, FuncInst, InternalFuncInst, MemoryInst, Store}, value::Value};
 
 type ExtFn = Box<dyn FnMut(&mut Store, Vec<Value>) -> Result<Option<Value>>>;
 
@@ -115,6 +116,9 @@ impl Runtime {
                         self.stack.push_front(ret_value);
                     }
                 }
+                Instruction::I32Store { offset, .. } => {
+                    execute_inst_i32_store(frame, &mut self.stack, &mut self.store.memories, *offset)?
+                } 
                 _ => todo!()
             };
         }
@@ -223,16 +227,35 @@ fn execute_inst_add(_frame: &mut Frame, stack: &mut LinkedList<Value>) -> Result
     Ok(())
 }
 
+fn execute_inst_i32_store(_frame: &mut Frame, stack: &mut LinkedList<Value>, memories: &mut [MemoryInst], offset: u32) -> Result<()> {
+    let (Some(value), Some(addr)) = (stack.pop_front(), stack.pop_front()) else {
+        bail!("The i32.store value set is not found");
+    };
+    let Some(dest) = memories.get_mut(0) else {
+        bail!("Memory is not found");
+    };
+
+    let addr = Into::<i32>::into(addr) as usize;
+    let offset = offset as usize;
+    let value = Into::<i32>::into(value);
+    let sz = std::mem::size_of::<i32>();
+
+    // copy_from_sliceはsrcとdstのサイズを合わせる必要がある
+    dest.data[addr+offset..][..sz].copy_from_slice(&value.to_le_bytes());
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod executor_tests {
-    use std::collections::LinkedList;
+    use std::{collections::LinkedList};
 
     use anyhow::Result;
     use crate::{binary::{
         instruction::Instruction, module::Module, 
         types::{FuncType, ValueType}}, 
         execution::{runtime::Runtime, 
-            store::{ExternalFuncInst, FuncInst, InternalFuncInst, Store, PPAGE_SIZE}, 
+            store::{ExternalFuncInst, FuncInst, InternalFuncInst, MemoryInst, Store, PPAGE_SIZE}, 
             value::Value
         }
     };
@@ -282,7 +305,7 @@ mod executor_tests {
                 (func $double (param i32) (result i32) (local.get 0) (local.get 0) i32.add)
             )
         "#;
-        let wasm = wat::parse_bytes(source.as_bytes())?;
+        let wasm = wat::parse_str(source)?;
         let mut instance = Runtime::instanciate(wasm)?;
 
         assert_eq!(Some(Value::I32(42)), instance.call("call_doubler", vec![Value::I32(21)])?);
@@ -291,7 +314,7 @@ mod executor_tests {
 
     #[test]
     fn execute_import_fn() -> Result<()> {
-        let wasm = wat::parse_bytes(r#"(module (func $double (import "env" "double_ext") (param i32) (result i32)))"#.as_bytes())?;
+        let wasm = wat::parse_str(r#"(module (func $double (import "env" "double_ext") (param i32) (result i32)))"#)?;
         let mut instance = Runtime::instanciate(wasm)?;
 
         instance.add_import("env", "double_ext", |_, args| Ok(Some(args[0] + args[0])))?;
@@ -306,6 +329,17 @@ mod executor_tests {
         let mut instance = Runtime::instanciate(wasm)?;
         
         assert_eq!(Some(Value::I32(-42)), instance.call_with_index(0, vec![])?);
+        Ok(())
+    }
+
+    #[test]
+    fn execute_i32_store() -> Result<()> {
+        let wasm = wat::parse_str(r#"(module (memory 1) (func (i32.const 10) (i32.const 42) (i32.store)))"#)?;
+        let mut instance = Runtime::instanciate(wasm)?;
+
+        _ = instance.call_with_index(0, vec![])?;
+
+        assert_eq!(42, instance.store.memories[0].data[10]);
         Ok(())
     }
 
@@ -570,6 +604,14 @@ mod executor_tests {
 
     #[test]
     fn eval_inst_i32_store() -> Result<()> {
-        todo!("13章で実装予定")        
+        let mut stack = LinkedList::<Value>::from([Value::I32(42), Value::I32(0)]);
+        let mut memories = vec![MemoryInst { data: vec![0; 100], limit: None }];
+
+        let mut frame = Frame::default();
+
+        super::execute_inst_i32_store(&mut frame, &mut stack, &mut memories, 10)?;
+
+        assert_eq!(42, memories[0].data[10]);
+        Ok(())
     }
 }
