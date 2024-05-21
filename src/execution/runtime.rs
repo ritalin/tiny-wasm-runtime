@@ -1,11 +1,10 @@
 use std::collections::{HashMap, LinkedList};
 
 use anyhow::{bail, Result};
-use num_traits::ToBytes;
 
 use crate::binary::{instruction::Instruction, module::Module, types::ExportDesc};
 
-use super::{store::{ExternalFuncInst, FuncInst, InternalFuncInst, MemoryInst, Store}, value::Value};
+use super::{store::{ExternalFuncInst, FuncInst, InternalFuncInst, MemoryInst, Store}, value::Value, wasi::WasiSnapshotPreview1};
 
 type ExtFn = Box<dyn FnMut(&mut Store, Vec<Value>) -> Result<Option<Value>>>;
 
@@ -24,6 +23,7 @@ pub struct Runtime {
     pub stack: LinkedList<Value>,
     pub call_stack: LinkedList<Frame>,
     pub import_fns: HashMap<(String, String), ExtFn>,
+    pub wasi_fns: Option<WasiSnapshotPreview1>,
 }
 
 impl Runtime {
@@ -33,6 +33,17 @@ impl Runtime {
 
         Ok(Runtime {
             store,
+            ..Default::default()
+        })
+    }
+
+    pub fn instanciate_with_wasi(wasm: impl AsRef<[u8]>, wasi: WasiSnapshotPreview1) -> Result<Self> {
+        let module = Module::new(wasm.as_ref())?;
+        let store = Store::new(module)?;
+
+        Ok(Runtime {
+            store,
+            wasi_fns: Some(wasi),
             ..Default::default()
         })
     }
@@ -119,7 +130,6 @@ impl Runtime {
                 Instruction::I32Store { offset, .. } => {
                     execute_inst_i32_store(frame, &mut self.stack, &mut self.store.memories, *offset)?
                 } 
-                _ => todo!()
             };
         }
 
@@ -154,7 +164,17 @@ impl Runtime {
         let (args, next_stack) = pop_args(&mut self.stack, func.fn_type.params.len());
         self.stack = next_stack;
 
-        call(&mut self.store, args)
+        match func.mod_name.as_str() {
+            "wasi_snapshot_preview1" => {
+                let Some(ref wasi) = self.wasi_fns else {
+                    bail!("Unsupported WASI");
+                };
+
+                wasi.invoke(&mut self.store, &func.fn_name, args)
+            }
+            _ => call(&mut self.store, args)
+        }
+        
     }
 
     pub fn add_import(&mut self, mod_name: impl Into<String>, fn_name: impl Into<String>, 
@@ -248,7 +268,7 @@ fn execute_inst_i32_store(_frame: &mut Frame, stack: &mut LinkedList<Value>, mem
 
 #[cfg(test)]
 mod executor_tests {
-    use std::{collections::LinkedList};
+    use std::collections::LinkedList;
 
     use anyhow::Result;
     use crate::{binary::{
@@ -612,6 +632,25 @@ mod executor_tests {
         super::execute_inst_i32_store(&mut frame, &mut stack, &mut memories, 10)?;
 
         assert_eq!(42, memories[0].data[10]);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod wasi_test {
+    use anyhow::Result;
+
+    use crate::execution::wasi::WasiSnapshotPreview1;
+
+    use super::Runtime;
+
+    #[test]
+    fn invoke_wasi() -> Result<()> {
+        let wasm = wat::parse_file("src/fixtures/invoke_wasi.wat")?;
+        let wasi = WasiSnapshotPreview1 {};
+
+        let mut rt = Runtime::instanciate_with_wasi(wasm, wasi)?;
+        let _ = rt.call("_start", vec![]);
         Ok(())
     }
 }
