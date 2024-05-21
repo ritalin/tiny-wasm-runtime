@@ -53,31 +53,14 @@ impl Store {
             _ => vec![],
         };
 
-        let mut fns = vec![];
+        let type_section_count = match &module.type_section {
+            Some(section) => section.len(),
+            None => 0,
+        };
+
+        let mut fns = Vec::<FuncInst>::with_capacity(type_section_count);
         let mut exports = ExportContainer::default();
         let mut memories = vec![];
-        
-        if let Some(section) = module.code_section {
-            for (body, i) in section.iter().zip(decded_fns.into_iter()) {
-                let Some(ref func_types) = module.type_section else {
-                    bail!("Not found type section")
-                };
-
-                let Some(fn_type) = func_types.get(i as usize) else {
-                    bail!("Not found func type in section")
-                };
-
-                let locals = body.locals.iter()
-                    .flat_map(|lc| std::iter::repeat(lc.value_type.clone()).take(lc.type_count as usize))
-                    .collect::<Vec<_>>()
-                ;
-
-                fns.push(FuncInst::Internal(InternalFuncInst { 
-                    fn_type: fn_type.clone(), 
-                    code: Function { locals, body: body.code.clone() }
-                }));
-            }
-        }
 
         if let Some(section) = module.import_section {
             for import in section {
@@ -95,6 +78,28 @@ impl Store {
                         }))
                     }
                 }
+            }
+        }
+
+        if let Some(section) = module.code_section {
+            for (body, i) in section.iter().zip(decded_fns.into_iter()) {
+                let Some(ref func_types) = module.type_section else { 
+                    bail!("Not found type section");
+                 };
+
+                let Some(fn_type) = func_types.get(i as usize) else {
+                    bail!("Not found func type in section")
+                };
+
+                let locals = body.locals.iter()
+                    .flat_map(|lc| std::iter::repeat(lc.value_type.clone()).take(lc.type_count as usize))
+                    .collect::<Vec<_>>()
+                ;
+
+                fns.push(FuncInst::Internal(InternalFuncInst { 
+                    fn_type: fn_type.clone(), 
+                    code: Function { locals, body: body.code.clone() }
+                }));
             }
         }
 

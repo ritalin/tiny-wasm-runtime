@@ -8,6 +8,12 @@ pub struct WasiSnapshotPreview1 {
 }
 
 impl WasiSnapshotPreview1 {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl WasiSnapshotPreview1 {
     pub fn invoke(&self, store: &mut Store, fn_name: &str, args: Vec<Value>) -> Result<Option<Value>> {
         let result = match fn_name {
             "fd_write" => {

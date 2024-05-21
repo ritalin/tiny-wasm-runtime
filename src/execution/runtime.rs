@@ -49,9 +49,14 @@ impl Runtime {
     }
 
     pub fn call(&mut self, name: impl Into<String>, args: Vec<Value>) -> Result<Option<Value>> {
-        let Some(export_fn) = self.store.exports.lookup.get(&name.into()) else {
+        let name = name.into();
+        println!("call_with_index# name: {}\n", &name);
+        println!("call_with_index/fns# name: {:?}\n", &self.store.fns);
+
+        let Some(export_fn) = self.store.exports.lookup.get(&name) else {
             bail!("Not found exported fn");
         };
+        println!("call_with_index#exp_fn: {:?}\n", &export_fn);
 
         match export_fn.desc {
             ExportDesc::Func(index) => {
@@ -93,7 +98,7 @@ impl Runtime {
             };
 
             frame.pc += 1;
-
+            
             match inst {
                 Instruction::End => {
                     let Some(Frame { sp, arity, .. }) = self.call_stack.pop_front() else {
@@ -157,10 +162,6 @@ impl Runtime {
     }
 
     fn execute_ext_call(&mut self, func: ExternalFuncInst) -> Result<Option<Value>> {
-        let Some(call) = self.import_fns.get_mut(&(func.mod_name.to_string(), func.fn_name.to_string())) else {
-            bail!("Ext function is not found");
-        };
-
         let (args, next_stack) = pop_args(&mut self.stack, func.fn_type.params.len());
         self.stack = next_stack;
 
@@ -172,7 +173,13 @@ impl Runtime {
 
                 wasi.invoke(&mut self.store, &func.fn_name, args)
             }
-            _ => call(&mut self.store, args)
+            _ => {
+                let Some(call) = self.import_fns.get_mut(&(func.mod_name.to_string(), func.fn_name.to_string())) else {
+                    bail!("Ext function is not found");
+                };
+        
+                call(&mut self.store, args)
+            }
         }
         
     }

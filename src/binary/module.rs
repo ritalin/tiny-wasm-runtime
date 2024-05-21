@@ -47,11 +47,14 @@ impl Module {
 
         let mut remaining = input;
         
+        eprintln!("mod#input {input:?}\n");
+
         while !remaining.is_empty() {
             match decode_section_header(remaining) {
                 Ok((input, (code, sz))) => {
                     let (rest, section_contents) = take(sz)(input)?;
 
+                    eprintln!("mod#section:{code:?} {section_contents:?}");    
                     match code {
                         SectionCode::Type => {
                             let (_, tys) = decode_type_section(section_contents)?;
@@ -135,7 +138,7 @@ fn decode_type_section(input: &[u8]) -> IResult<&[u8], Vec<FuncType>> {
 fn decode_function_section(input: &[u8]) -> IResult<&[u8], Vec<u32>> {
     let mut fns = vec![];
     let (mut input, count) = leb128_u32(input)?;
-    
+
     for _ in 0..count {
         let (rest, i) = leb128_u32(input)?;
         fns.push(i);
