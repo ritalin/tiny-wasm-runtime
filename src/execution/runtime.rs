@@ -126,7 +126,7 @@ impl Runtime {
                 Instruction::I32Const(value) => execute_inst_i32_const(frame, &mut self.stack, *value)?,
                 Instruction::I32Add => execute_inst_add(frame, &mut self.stack)?,
                 Instruction::I32Sub => execute_inst_sub(frame, &mut self.stack)?,
-                Instruction::I32LtS => todo!(),
+                Instruction::I32LtS => execute_inst_lt(frame, &mut self.stack)?,
                 Instruction::Call(index) => {
                     let fn_index = (*index as usize).clone();
 
@@ -265,6 +265,15 @@ fn execute_inst_sub(_frame: &mut Frame, stack: &mut LinkedList<Value>) -> Result
     Ok(())
 }
 
+fn execute_inst_lt(_frame: &mut Frame, stack: &mut LinkedList<Value>) -> Result<()> {
+    let (Some(rhs), Some(lhs)) = (stack.pop_front(), stack.pop_front()) else {
+        bail!("Not found enough value in stack");
+    };
+
+    stack.push_front((lhs < rhs).into());
+    Ok(())
+}
+
 fn execute_inst_i32_store(_frame: &mut Frame, stack: &mut LinkedList<Value>, memories: &mut [MemoryInst], offset: u32) -> Result<()> {
     let (Some(value), Some(addr)) = (stack.pop_front(), stack.pop_front()) else {
         bail!("The i32.store value set is not found");
@@ -332,6 +341,17 @@ mod executor_tests {
         assert_eq!(Some(Value::I32(42)), instance.call_with_index(0, vec![Value::I32(60), Value::I32(18)])?);
         assert_eq!(Some(Value::I32(-21)), instance.call_with_index(0, vec![Value::I32(21), Value::I32(42)])?);
         assert_eq!(Some(Value::I32(20)), instance.call_with_index(0, vec![Value::I32(20), Value::I32(0)])?);
+        Ok(())
+    }
+
+    #[test]
+    fn execute_fn_le() -> Result<()> {
+        let wasm = wat::parse_str(r#"(module (func $fib (param i32 i32)(result i32) (i32.lt_s (local.get 0) (local.get 1))))"#)?;
+        let mut instance = Runtime::instanciate(wasm)?;
+
+        assert_eq!(Some(Value::I32(0)), instance.call_with_index(0, vec![Value::I32(60), Value::I32(18)])?);
+        assert_eq!(Some(Value::I32(1)), instance.call_with_index(0, vec![Value::I32(18), Value::I32(60)])?);
+        assert_eq!(Some(Value::I32(0)), instance.call_with_index(0, vec![Value::I32(42), Value::I32(42)])?);
         Ok(())
     }
 
@@ -506,6 +526,22 @@ mod executor_tests {
 
         assert_eq!(1, stack.len());
         assert_eq!(Some(Value::I32(-5)), stack.front().map(|v| v.clone()));
+        Ok(())
+    }
+
+    #[test]
+    fn eval_inst_i32_lt_s() -> Result<()> {
+        let mut frame = Frame { 
+            pc: 0, 
+            locals: vec![],
+            ..Default::default()
+        };
+
+        let mut stack = LinkedList::<Value>::from([Value::I32(10), Value::I32(5)]);
+        assert_eq!(true, super::execute_inst_lt(&mut frame, &mut stack).is_ok());
+
+        assert_eq!(1, stack.len());
+        assert_eq!(Some(Value::I32(1)), stack.front().map(|v| v.clone()));        
         Ok(())
     }
 

@@ -29,11 +29,27 @@ impl std::ops::Sub for Value {
     }
 }
 
+impl PartialOrd for Value {
+    fn partial_cmp(&self, rhs: &Self) -> Option<std::cmp::Ordering> {
+        match (self, rhs) {
+            (Value::I32(lhs), Value::I32(rhs)) => lhs.partial_cmp(&rhs),
+            (Value::I64(lhs), Value::I64(rhs)) => lhs.partial_cmp(&rhs),
+            _ => None,
+        }
+    }
+}
+
 impl From<Value> for i32 {
     fn from(value: Value) -> Self {
         match value {
             Value::I32(v) => v,
             _ => unimplemented!("Unsupported feature"),
         }
+    }
+}
+
+impl From<bool> for Value {
+    fn from(value: bool) -> Self {
+        Value::I32(Into::<i32>::into(value))
     }
 }
