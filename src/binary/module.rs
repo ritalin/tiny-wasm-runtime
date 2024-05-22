@@ -179,6 +179,7 @@ fn decode_instruction(input: &[u8]) -> IResult<&[u8], Instruction> {
             Ok((input, Instruction::I32Store { align, offset }))
         }
         Opcode::I32Add => Ok((input, Instruction::I32Add)),
+        Opcode::I32Sub => Ok((input, Instruction::I32Sub)),
         Opcode::Call => {
             let (input, i) = leb128_u32(input)?;
             Ok((input, Instruction::Call(i)))
@@ -581,6 +582,7 @@ mod decoder_tests {
         assert_eq!(Instruction::LocalSet(2), super::decode_instruction(&[0x21, 2])?.1);
         assert_eq!(Instruction::I32Const(42), super::decode_instruction(&[0x41, 42])?.1);
         assert_eq!(Instruction::I32Store { align: 0xa, offset: 0x7f }, super::decode_instruction(&[0x36, 0xa, 0x7f])?.1);
+        assert_eq!(Instruction::I32Sub, super::decode_instruction(&[0x6B])?.1);
         
         Ok(())
     }

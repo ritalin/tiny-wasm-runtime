@@ -125,6 +125,7 @@ impl Runtime {
                 Instruction::LocalSet(index) => execute_inst_pop_to_local(frame, &mut self.stack, *index)?,
                 Instruction::I32Const(value) => execute_inst_i32_const(frame, &mut self.stack, *value)?,
                 Instruction::I32Add => execute_inst_add(frame, &mut self.stack)?,
+                Instruction::I32Sub => todo!(),
                 Instruction::Call(index) => {
                     let fn_index = (*index as usize).clone();
 
