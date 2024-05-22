@@ -6,6 +6,7 @@ pub enum Instruction {
     LocalSet(u32),
     I32Store { align: u32, offset: u32 },
     I32Const(i32),
+    I32LtS,
     I32Add,
     I32Sub,
 }

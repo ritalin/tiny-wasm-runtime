@@ -8,6 +8,7 @@ pub enum Opcode {
     LocalSet = 0x21,
     I32Store = 0x36,
     I32Const = 0x41,
+    I32LtS = 0x48,
     I32Add = 0x6A,
     I32Sub = 0x6B,
 }

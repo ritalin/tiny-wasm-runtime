@@ -126,6 +126,7 @@ impl Runtime {
                 Instruction::I32Const(value) => execute_inst_i32_const(frame, &mut self.stack, *value)?,
                 Instruction::I32Add => execute_inst_add(frame, &mut self.stack)?,
                 Instruction::I32Sub => execute_inst_sub(frame, &mut self.stack)?,
+                Instruction::I32LtS => todo!(),
                 Instruction::Call(index) => {
                     let fn_index = (*index as usize).clone();
 
