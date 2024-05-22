@@ -47,14 +47,11 @@ impl Module {
 
         let mut remaining = input;
         
-        eprintln!("mod#input {input:?}\n");
-
         while !remaining.is_empty() {
             match decode_section_header(remaining) {
                 Ok((input, (code, sz))) => {
                     let (rest, section_contents) = take(sz)(input)?;
 
-                    eprintln!("mod#section:{code:?} {section_contents:?}");    
                     match code {
                         SectionCode::Type => {
                             let (_, tys) = decode_type_section(section_contents)?;
