@@ -4,17 +4,18 @@ use anyhow::{bail, Result};
 
 use crate::binary::{instruction::Instruction, module::Module, types::{Block, ExportDesc}};
 
-use super::{store::{ExternalFuncInst, FuncInst, InternalFuncInst, MemoryInst, Store}, value::Value, wasi::WasiSnapshotPreview1};
+use super::{store::{ExternalFuncInst, FuncInst, InternalFuncInst, MemoryInst, Store}, value::{Label, Value}, wasi::WasiSnapshotPreview1};
 
 type ExtFn = Box<dyn FnMut(&mut Store, Vec<Value>) -> Result<Option<Value>>>;
 
-#[derive(Default, Debug, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
     pub pc: usize,
     pub insts: Vec<Instruction>,
     pub locals: Vec<Value>,
     pub arity: usize,
     pub sp: usize,
+    pub labels: LinkedList<Label>,
 }
 
 #[derive(Default)]
@@ -22,6 +23,7 @@ pub struct Runtime {
     pub store: Store,
     pub stack: LinkedList<Value>,
     pub call_stack: LinkedList<Frame>,
+    pub current_frame: Option<Frame>,
     pub import_fns: HashMap<(String, String), ExtFn>,
     pub wasi_fns: Option<WasiSnapshotPreview1>,
 }
@@ -89,7 +91,7 @@ impl Runtime {
 
     fn execute(&mut self) -> Result<()> {
         loop {
-            let Some(frame) = self.call_stack.front_mut() else {
+            let Some(frame) = self.current_frame.as_mut() else {
                 break;
             };
 
@@ -101,8 +103,11 @@ impl Runtime {
             
             match inst {
                 Instruction::End => {
-                    let Some(Frame { sp, arity, .. }) = self.call_stack.pop_front() else {
-                        bail!("Not found frame");
+                    let Some(Frame { sp, arity, .. }) = self.current_frame else {
+                        bail!("End: Not found current frame");
+                    };
+                    if let Some(next_frame) = self.call_stack.pop_front() {
+                        self.current_frame = Some(next_frame);
                     };
 
                     match arity {
@@ -146,8 +151,12 @@ impl Runtime {
     }
 
     fn execute_inst_call(&mut self, next_frame: Frame) -> Result<Option<Value>> {
+        if let Some(ref frame) = self.current_frame {
+            self.call_stack.push_front(frame.clone());
+        }
+        self.current_frame = Some(next_frame.clone());
+
         let arity = next_frame.arity;
-        self.call_stack.push_front(next_frame);
 
         match  self.execute() {
             Err(err) => {
@@ -157,7 +166,7 @@ impl Runtime {
             }
             Ok(_) if arity > 0 => {
                 match self.stack.pop_front() {
-                    None => bail!("Not found return value"),
+                    None => bail!("Not found return value from internal call"),
                     Some(value) => Ok(Some(value))
                 }
             }
@@ -217,7 +226,8 @@ fn make_frame(stack: &mut LinkedList<Value>, func: &InternalFuncInst) -> (Frame,
         insts: func.code.body.clone(), 
         locals: args.into_iter().chain(locals).collect::<Vec<_>>(),
         arity: func.fn_type.returns.len(), 
-        sp: next_stack.len() 
+        sp: next_stack.len(),
+        labels: LinkedList::default(),
     };
 
     (frame, next_stack)
@@ -295,6 +305,14 @@ fn execute_inst_i32_store(_frame: &mut Frame, stack: &mut LinkedList<Value>, mem
     Ok(())
 }
 
+fn execute_inst_return_from_fn(stack: &mut LinkedList<Value>, call_stack: &mut LinkedList<Frame>) -> Result<(LinkedList<Value>, LinkedList<Frame>)> {
+    todo!()
+}
+
+fn execute_inst_return_from_block(stack: &mut LinkedList<Value>, frame: &mut Frame) -> Result<(LinkedList<Value>, LinkedList<Label>)> {
+    todo!()
+}
+
 #[cfg(test)]
 mod executor_tests {
     use std::collections::LinkedList;
@@ -305,7 +323,7 @@ mod executor_tests {
         types::{FuncType, ValueType}}, 
         execution::{runtime::Runtime, 
             store::{ExternalFuncInst, FuncInst, InternalFuncInst, MemoryInst, Store, PPAGE_SIZE}, 
-            value::Value
+            value::{Label, Value}
         }
     };
 
@@ -715,6 +733,79 @@ mod executor_tests {
         super::execute_inst_i32_store(&mut frame, &mut stack, &mut memories, 10)?;
 
         assert_eq!(42, memories[0].data[10]);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_return_from_fn() -> Result<()> {
+        let mut stack = LinkedList::<Value>::from([Value::I32(42), Value::I32(100), Value::I64(1024), Value::I32(42)]);
+        let frame = Frame { 
+            arity: 1, sp: 0, 
+            ..Default::default() 
+        };
+        let mut call_stack = LinkedList::<Frame>::from([frame, Frame::default()]);
+
+        let (next_stack, next_call_stack) = super::execute_inst_return_from_fn(&mut stack, &mut call_stack)?;
+        
+        assert_eq!(1, next_stack.len());
+        assert_eq!(vec![Value::I32(42)], stack.into_iter().collect::<Vec<_>>());
+
+        assert_eq!(1, next_call_stack.len());
+        assert_eq!(vec![Frame::default()], next_call_stack.into_iter().collect::<Vec<_>>());
+
+        // assert_eq!(Frame { arity: 1, sp: 0, ..Default::default() }, frame);
+        todo!();
+        Ok(())
+    }
+
+    #[test]
+    fn eval_return_from_block() -> Result<()> {
+        let mut stack = LinkedList::<Value>::from([Value::I32(42), Value::I32(100), Value::I64(1024), Value::I32(42)]);
+        let frame = Frame { 
+            labels: LinkedList::from([
+                Label { arity: 1, sp: 1 }, 
+                Label::default(), 
+            ]), 
+            arity: 0, sp: 0, 
+            ..Default::default() 
+        };
+        let mut call_stack = LinkedList::<Frame>::from([frame, Frame::default()]);
+        let mut frame = call_stack.front_mut().unwrap();
+
+        let next_stack = super::execute_inst_return_from_block(&mut stack, &mut frame)?;
+        
+        // assert_eq!(3, next_stack.len());
+        // assert_eq!(vec![Value::I32(42), Value::I64(1024), Value::I32(42)], stack.into_iter().collect::<Vec<_>>());
+        todo!();
+        // assert_eq!(1, next_frame_labels.len());
+        // assert_eq!(vec![Label::default()], next_frame_labels.into_iter().collect::<Vec<_>>());
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_return_void_from_block() -> Result<()> {
+        let mut stack = LinkedList::<Value>::from([Value::I32(42), Value::I32(100), Value::I64(1024), Value::I32(42)]);
+        let frame = Frame { 
+            labels: LinkedList::from([
+                Label { arity: 0, sp: 1, }, 
+                Label::default(), 
+            ]), 
+            arity: 1, sp: 0, 
+            ..Default::default() 
+        };
+        let mut call_stack = LinkedList::<Frame>::from([frame, Frame::default()]);
+        let mut frame = call_stack.front_mut().unwrap();
+
+        let (next_stack, next_call_stack) = super::execute_inst_return_from_block(&mut stack, &mut frame)?;
+        
+        assert_eq!(3, next_stack.len());
+        assert_eq!(vec![Value::I32(100), Value::I64(1024), Value::I32(42)], stack.into_iter().collect::<Vec<_>>());
+
+        assert_eq!(2, next_call_stack.len());
+        // assert_eq!(call_stack, next_call_stack);
+        todo!();
+        // assert_eq!(Frame { labels: LinkedList::from([Label::default()]), arity: 1, sp: 1, ..Default::default() }, frame);
         Ok(())
     }
 

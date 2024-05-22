@@ -53,3 +53,9 @@ impl From<bool> for Value {
         Value::I32(Into::<i32>::into(value))
     }
 }
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Label {
+    pub arity: u32,
+    pub sp: usize,
+}
