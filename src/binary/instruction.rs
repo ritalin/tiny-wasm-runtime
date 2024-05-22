@@ -1,6 +1,9 @@
+use super::types::Block;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
     End,
+    If(Block),
     Call(u32),
     LocalGet(u32),
     LocalSet(u32),

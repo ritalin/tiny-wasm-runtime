@@ -2,7 +2,7 @@ use std::collections::{HashMap, LinkedList};
 
 use anyhow::{bail, Result};
 
-use crate::binary::{instruction::Instruction, module::Module, types::ExportDesc};
+use crate::binary::{instruction::Instruction, module::Module, types::{Block, ExportDesc}};
 
 use super::{store::{ExternalFuncInst, FuncInst, InternalFuncInst, MemoryInst, Store}, value::Value, wasi::WasiSnapshotPreview1};
 
@@ -134,6 +134,7 @@ impl Runtime {
                         self.stack.push_front(ret_value);
                     }
                 }
+                Instruction::If(Block(block_type)) => todo!(),
                 Instruction::I32Store { offset, .. } => {
                     execute_inst_i32_store(frame, &mut self.stack, &mut self.store.memories, *offset)?
                 } 

@@ -55,3 +55,12 @@ pub struct Data {
     pub offset: u32,
     pub bytes: Vec<u8>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlockType {
+    Void,
+    Value(Vec<ValueType>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Block(pub BlockType);

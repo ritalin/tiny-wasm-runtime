@@ -3,7 +3,7 @@ use nom::{bytes::complete::{tag, take}, multi::many0, number::complete::{le_u32,
 use nom_leb128::{leb128_i32, leb128_u32};
 use num_traits::FromPrimitive;
 
-use super::{instruction::Instruction, opcode::Opcode, section::{Function, FunctionLocal}, types::{Data, Export, ExportDesc, FuncType, Import, ImportDesc, Memory, ValueType}};
+use super::{instruction::Instruction, opcode::Opcode, section::{Function, FunctionLocal}, types::{Block, BlockType, Data, Export, ExportDesc, FuncType, Import, ImportDesc, Memory, ValueType}};
 
 const WASM_MAGIC: &str = "\0asm";
 
@@ -111,6 +111,17 @@ fn decodea_value_type(input: &[u8]) -> IResult<&[u8], ValueType> {
     Ok((input, v.into()))
 }
 
+fn decode_block_type(input: &[u8]) -> IResult<&[u8], Block> {
+    let (input, ty) = le_u8(input)?;
+
+    let block = match ty {
+        0x40 => Block(BlockType::Void),
+        _ => Block(BlockType::Value(vec![ty.into()])),
+    };
+
+    Ok((input, block))
+}
+
 fn decode_type_section(input: &[u8]) -> IResult<&[u8], Vec<FuncType>> {
     let (mut input, type_count) = leb128_u32(input)?;
     let mut fns = vec![];
@@ -181,6 +192,10 @@ fn decode_instruction(input: &[u8]) -> IResult<&[u8], Instruction> {
         Opcode::Call => {
             let (input, i) = leb128_u32(input)?;
             Ok((input, Instruction::Call(i)))
+        }
+        Opcode::If => {
+            let (input, block) = decode_block_type(input)?;
+            Ok((input, Instruction::If(block)))
         }
     }
 }
@@ -356,7 +371,7 @@ fn decode_data_section(input: &[u8]) -> IResult<&[u8], Vec<Data>> {
 
 #[cfg(test)]
 mod decoder_tests {
-    use crate::binary::{instruction::Instruction, module::Module, section::{Function, FunctionLocal, SectionCode}, types::{Data, Export, ExportDesc, FuncType, Import, ImportDesc, Memory, ValueType}};
+    use crate::binary::{instruction::Instruction, module::Module, section::{Function, FunctionLocal, SectionCode}, types::{Block, BlockType, Data, Export, ExportDesc, FuncType, Import, ImportDesc, Memory, ValueType}};
     use anyhow::Result;
 
     #[test]
@@ -555,6 +570,14 @@ mod decoder_tests {
     }
 
     #[test]
+    fn decode_block_types() -> Result<()> {
+        assert_eq!(Block(BlockType::Void), super::decode_block_type(&[0x40])?.1);
+        assert_eq!(Block(BlockType::Value(vec![ValueType::I32])), super::decode_block_type(&[0x7F])?.1);
+        assert_eq!(Block(BlockType::Value(vec![ValueType::I64])), super::decode_block_type(&[0x7E])?.1);
+        Ok(())
+    }
+
+    #[test]
     fn decode_type_sections() -> Result<()> {
         let ret = super::decode_type_section(&[0x01, 0x60, 0x02, 0x7F, 0x7E, 0])?.1;
         assert_eq!(1, ret.len());
@@ -583,6 +606,8 @@ mod decoder_tests {
         assert_eq!(Instruction::I32Sub, super::decode_instruction(&[0x6B])?.1);
         assert_eq!(Instruction::I32LtS, super::decode_instruction(&[0x48])?.1);
 
+        assert_eq!(Instruction::If(Block(BlockType::Void)), super::decode_instruction(&[0x04, 0x40])?.1);
+        assert_eq!(Instruction::If(Block(BlockType::Value(vec![ValueType::I32]))), super::decode_instruction(&[0x04, 0x7F])?.1);
         Ok(())
     }
 
