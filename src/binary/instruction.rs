@@ -4,6 +4,7 @@ use super::types::Block;
 pub enum Instruction {
     End,
     If(Block),
+    Return,
     Call(u32),
     LocalGet(u32),
     LocalSet(u32),

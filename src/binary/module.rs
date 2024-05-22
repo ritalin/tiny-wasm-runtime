@@ -197,6 +197,7 @@ fn decode_instruction(input: &[u8]) -> IResult<&[u8], Instruction> {
             let (input, block) = decode_block_type(input)?;
             Ok((input, Instruction::If(block)))
         }
+        Opcode::Return => Ok((input, Instruction::Return)),
     }
 }
 
@@ -608,6 +609,8 @@ mod decoder_tests {
 
         assert_eq!(Instruction::If(Block(BlockType::Void)), super::decode_instruction(&[0x04, 0x40])?.1);
         assert_eq!(Instruction::If(Block(BlockType::Value(vec![ValueType::I32]))), super::decode_instruction(&[0x04, 0x7F])?.1);
+
+        assert_eq!(Instruction::Return, super::decode_instruction(&[0x0F])?.1);
         Ok(())
     }
 

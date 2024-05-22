@@ -135,6 +135,7 @@ impl Runtime {
                     }
                 }
                 Instruction::If(Block(block_type)) => todo!(),
+                Instruction::Return => todo!(),
                 Instruction::I32Store { offset, .. } => {
                     execute_inst_i32_store(frame, &mut self.stack, &mut self.store.memories, *offset)?
                 } 
@@ -715,6 +716,11 @@ mod executor_tests {
 
         assert_eq!(42, memories[0].data[10]);
         Ok(())
+    }
+
+    #[test]
+    fn eval_if_block() -> Result<()> {
+        todo!()
     }
 }
 

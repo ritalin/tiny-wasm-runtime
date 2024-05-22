@@ -4,6 +4,7 @@ use num_derive::FromPrimitive;
 pub enum Opcode {
     End = 0x0B,
     If = 0x04,
+    Return = 0x0F,
     Call = 0x10,
     LocalGet = 0x20,
     LocalSet = 0x21,
