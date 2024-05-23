@@ -30,17 +30,17 @@ pub enum FuncInst {
     External(ExternalFuncInst),
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct ExportContainer {
     pub lookup: HashMap<String, Export>,
 }
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct MemoryInst {
     pub data: Vec<u8>,
     pub limit: Option<u32>,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Store {
     pub fns: Vec<FuncInst>,
     pub exports: ExportContainer,

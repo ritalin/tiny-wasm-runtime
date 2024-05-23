@@ -4,6 +4,7 @@ use anyhow::{bail, Result};
 
 use super::{store::Store, value::Value};
 
+#[derive(Debug)]
 pub struct WasiSnapshotPreview1 {
 }
 

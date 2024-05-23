@@ -10,9 +10,12 @@ nom = "7.1.3"
 nom-leb128 = "0.2.0"
 num-derive = "0.4.2"
 num-traits = "0.2.19"
-wat = "1.207.0"
+wat = "1.208.1"
 capture-stdio = "0.1.1"
 clap = { version = "4.5.4", features = ["derive"] }
+tracing-subscriber = { version = "0.3.18", features = ["fmt"] }
+tracing = { version = "0.1.40", features = ["attributes"] }
+tracing-error = { version = "0.2.0", features = ["traced-error"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4.0"

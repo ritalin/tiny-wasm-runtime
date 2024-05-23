@@ -17,6 +17,16 @@ impl std::ops::Add for Value {
     }
 }
 
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let v = match self {
+            Value::I32(v) => v.to_string(),
+            Value::I64(v) => v.to_string(),
+        };
+        write!(f, "{v}")
+    }
+}
+
 impl std::ops::Sub for Value {
     type Output = Value;
 
@@ -56,6 +66,7 @@ impl From<bool> for Value {
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Label {
-    pub arity: u32,
+    pub pc: usize,
+    pub arity: usize,
     pub sp: usize,
 }

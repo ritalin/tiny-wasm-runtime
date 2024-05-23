@@ -1,8 +1,9 @@
 use std::collections::{HashMap, LinkedList};
 
 use anyhow::{bail, Result};
+use tracing::{instrument, trace, Level};
 
-use crate::binary::{instruction::Instruction, module::Module, types::{Block, ExportDesc}};
+use crate::binary::{instruction::Instruction, module::Module, types::{Block, BlockType, ExportDesc}};
 
 use super::{store::{ExternalFuncInst, FuncInst, InternalFuncInst, MemoryInst, Store}, value::{Label, Value}, wasi::WasiSnapshotPreview1};
 
@@ -28,6 +29,18 @@ pub struct Runtime {
     pub wasi_fns: Option<WasiSnapshotPreview1>,
 }
 
+impl std::fmt::Debug for Runtime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Runtime")
+            .field("store", &self.store)
+            .field("stack", &self.stack)
+            .field("call_stack", &self.call_stack)
+            .field("current_frame", &self.current_frame)
+            .field("wasi_fns", &self.wasi_fns)
+        .finish()
+    }
+}
+
 impl Runtime {
     pub fn instanciate(wasm: impl AsRef<[u8]>) -> Result<Self> {
         let module = Module::new(wasm.as_ref())?;
@@ -50,15 +63,12 @@ impl Runtime {
         })
     }
 
-    pub fn call(&mut self, name: impl Into<String>, args: Vec<Value>) -> Result<Option<Value>> {
+    pub fn call(&mut self, name: impl Into<String> + std::fmt::Debug, args: Vec<Value>) -> Result<Option<Value>> {
         let name = name.into();
-        println!("call_with_index# name: {}\n", &name);
-        println!("call_with_index/fns# name: {:?}\n", &self.store.fns);
 
         let Some(export_fn) = self.store.exports.lookup.get(&name) else {
             bail!("Not found exported fn");
         };
-        println!("call_with_index#exp_fn: {:?}\n", &export_fn);
 
         match export_fn.desc {
             ExportDesc::Func(index) => {
@@ -67,29 +77,44 @@ impl Runtime {
         }
     }
 
+    #[tracing::instrument(skip(self) level=tracing::Level::TRACE)]
     pub fn call_with_index(&mut self, fn_index: usize, args: Vec<Value>) -> Result<Option<Value>> {
+        trace!("(CAll/IN)");
+
         let Some(func) = self.store.fns.get(fn_index) else {
             bail!("Fundtion is not found");
         };
 
-        for arg in args {
-            self.stack.push_front(arg);
-        }
-
         match func {
             FuncInst::Internal(func) => {
+                if args.len() != func.fn_type.params.len() {
+                    bail!("Number of function args is mismatched (args: {}, passed: {})", func.fn_type.params.len(), args.len());
+                }
+                for arg in args {
+                    self.stack.push_front(arg);
+                }
+        
                 let (frame, next_stack) = make_frame(&mut self.stack, func);
                 self.stack = next_stack;
 
                 self.execute_inst_call(frame)
             }
             FuncInst::External(func) => {
+                if args.len() != func.fn_type.params.len() {
+                    bail!("Number of function args is mismatched");
+                }
+                for arg in args {
+                    self.stack.push_front(arg);
+                }
+        
                 self.execute_ext_call(func.clone())
             }
         }
     }
 
     fn execute(&mut self) -> Result<()> {
+        trace!("(CALL/IN)");
+
         loop {
             let Some(frame) = self.current_frame.as_mut() else {
                 break;
@@ -103,28 +128,17 @@ impl Runtime {
             
             match inst {
                 Instruction::End => {
-                    let Some(Frame { sp, arity, .. }) = self.current_frame else {
-                        bail!("End: Not found current frame");
-                    };
-                    if let Some(next_frame) = self.call_stack.pop_front() {
-                        self.current_frame = Some(next_frame);
-                    };
+                    let (next_stack, next_frame) = execute_inst_end(frame, &mut self.stack, &mut self.call_stack)?;
 
-                    match arity {
-                        0 => {
-                            // 戻り値なし
-                            self.stack = self.stack.split_off(sp);
-                        }
-                        _ => {
-                            // 戻り値あり
-                            let Some(value) = self.stack.pop_front() else {
-                                bail!("Not found return value");
-                            };
+                    self.stack = next_stack;
+                    self.current_frame = next_frame;
 
-                            self.stack = self.stack.split_off(sp);
-                            self.stack.push_front(value);
-                        }
-                    }
+                    // self.stack = rewind_stack(&mut self.stack, sp, arity)?;
+
+                    // // フレームを巻き戻す
+                    // if let Some(next_frame) = self.call_stack.pop_front() {
+                    //     self.current_frame = Some(next_frame);
+                    // };
                 }
                 Instruction::LocalGet(index) => execute_inst_push_from_local(frame, &mut self.stack, *index)?,
                 Instruction::LocalSet(index) => execute_inst_pop_to_local(frame, &mut self.stack, *index)?,
@@ -134,13 +148,27 @@ impl Runtime {
                 Instruction::I32LtS => execute_inst_lt(frame, &mut self.stack)?,
                 Instruction::Call(index) => {
                     let fn_index = (*index as usize).clone();
+                    let count = get_func_arg_count(&self.store.fns, *index)?;
+                    let (args, next_stack) = pop_args(&mut self.stack, count);
 
-                    if let Some(ret_value) = self.call_with_index(fn_index, vec![])? {
+                    self.stack = next_stack;
+
+                    if let Some(ret_value) = self.call_with_index(fn_index, args)? {
                         self.stack.push_front(ret_value);
                     }
                 }
-                Instruction::If(Block(block_type)) => todo!(),
-                Instruction::Return => todo!(),
+                Instruction::If(Block(block_type)) => {
+                    let (next_stack, next_frame) = execute_inst_if(frame.clone(), &mut self.stack, block_type)?;
+
+                    self.stack = next_stack;
+                    self.current_frame = Some(next_frame);
+                }                   
+                Instruction::Return => {
+                    let (next_stack, next_frame) = execute_inst_return(frame, &mut self.stack, &mut self.call_stack)?;
+
+                    self.stack = next_stack;
+                    self.current_frame = next_frame;
+                }
                 Instruction::I32Store { offset, .. } => {
                     execute_inst_i32_store(frame, &mut self.stack, &mut self.store.memories, *offset)?
                 } 
@@ -206,6 +234,19 @@ impl Runtime {
     }
 }
 
+fn get_func_arg_count(fns: &[FuncInst], index: u32) -> Result<usize> {
+    let Some(func) = fns.get(index as usize) else {
+        bail!("Function is not found: {index}");
+    };
+
+    match func {
+        FuncInst::Internal(InternalFuncInst { fn_type, .. }) |
+        FuncInst::External(ExternalFuncInst { fn_type, .. }) => {
+            Ok(fn_type.params.len())
+        }
+    }
+}
+
 fn pop_args(stack: &mut LinkedList<Value>, count: usize) -> (Vec<Value>, LinkedList<Value>) {
     let next_stack = stack.split_off(count);
     let args = stack.iter().map(Value::clone).rev().collect::<Vec<_>>();
@@ -233,16 +274,44 @@ fn make_frame(stack: &mut LinkedList<Value>, func: &InternalFuncInst) -> (Frame,
     (frame, next_stack)
 }
 
+fn rewind_stack(stack: &mut LinkedList<Value>, sp: usize, arity: usize) -> Result<LinkedList<Value>> {
+    let next_stack = match arity {
+        0 => {
+            // 戻り値なし
+            stack.split_off(stack.len() - sp)
+        }
+        _ => {
+            // 戻り値あり
+            let Some(value) = stack.pop_front() else {
+                bail!("Not found return value");
+            };
+
+            let mut next_stack = stack.split_off(stack.len() - sp);
+            next_stack.push_front(value);
+            next_stack
+        }
+    };
+
+    Ok(next_stack)
+}
+
+#[instrument(level=Level::TRACE)]
 fn execute_inst_push_from_local(frame: &mut Frame, stack: &mut LinkedList<Value>, index: u32) -> Result<()> {
+    trace!("(CALL/IN)");
+
     let Some(value) = frame.locals.get(index as usize) else {
         bail!("Not found local var: {index}");
     };
 
     stack.push_front(value.clone());
+
     Ok(())
 }
 
+#[instrument(level=Level::TRACE)]
 fn execute_inst_pop_to_local(frame: &mut Frame, stack: &mut LinkedList<Value>, index: u32) -> Result<()> {
+    trace!("(CALL/IN)");
+
     let Some(lc) = frame.locals.get_mut(index as usize) else {
         bail!("Not found local var: {index}");
     };
@@ -254,12 +323,18 @@ fn execute_inst_pop_to_local(frame: &mut Frame, stack: &mut LinkedList<Value>, i
     Ok(())
 }
 
+#[instrument(level=Level::TRACE)]
 fn execute_inst_i32_const(_frame: &mut Frame, stack: &mut LinkedList<Value>, value: i32) -> Result<()> {
+    trace!("(CALL/IN)");
+
     stack.push_front(Value::I32(value));
     Ok(())
 }
 
+#[instrument(level=Level::TRACE)]
 fn execute_inst_add(_frame: &mut Frame, stack: &mut LinkedList<Value>) -> Result<()> {
+    trace!("(CALL/IN)");
+
     let (Some(rhs), Some(lhs)) = (stack.pop_front(), stack.pop_front()) else {
         bail!("Not found enough value in stack");
     };
@@ -268,7 +343,10 @@ fn execute_inst_add(_frame: &mut Frame, stack: &mut LinkedList<Value>) -> Result
     Ok(())
 }
 
+#[instrument(level=Level::TRACE)]
 fn execute_inst_sub(_frame: &mut Frame, stack: &mut LinkedList<Value>) -> Result<()> {
+    trace!("(CALL/IN)");
+
     let (Some(rhs), Some(lhs)) = (stack.pop_front(), stack.pop_front()) else {
         bail!("Not found enough value in stack");
     };
@@ -305,12 +383,79 @@ fn execute_inst_i32_store(_frame: &mut Frame, stack: &mut LinkedList<Value>, mem
     Ok(())
 }
 
-fn execute_inst_return_from_fn(stack: &mut LinkedList<Value>, call_stack: &mut LinkedList<Frame>) -> Result<(LinkedList<Value>, LinkedList<Frame>)> {
-    todo!()
+fn execute_inst_end(frame: &mut Frame, stack: &mut LinkedList<Value>, call_stack: &mut LinkedList<Frame>) -> Result<(LinkedList<Value>, Option<Frame>)> {
+    match frame.labels.pop_front() {
+        Some(Label { pc, sp, arity }) => {
+            let next_stack = rewind_stack(stack, sp, arity)?;
+            let mut next_frame = frame.clone();
+            next_frame.pc = pc;
+
+            Ok((next_stack, Some(next_frame)))
+        }
+        None => {
+            let next_stack = rewind_stack(stack, frame.sp, frame.arity)?;
+            Ok((next_stack, call_stack.pop_front()))
+        }
+    }
 }
 
-fn execute_inst_return_from_block(stack: &mut LinkedList<Value>, frame: &mut Frame) -> Result<(LinkedList<Value>, LinkedList<Label>)> {
-    todo!()
+fn execute_inst_return(frame: &mut Frame, stack: &mut LinkedList<Value>, call_stack: &mut LinkedList<Frame>) -> Result<(LinkedList<Value>, Option<Frame>)> {
+    let next_stack = rewind_stack(stack, frame.sp, frame.arity)?;
+    Ok((next_stack, call_stack.pop_front()))
+}
+
+#[tracing::instrument(level=tracing::Level::TRACE)]
+fn execute_inst_if(frame: Frame, stack: &mut LinkedList<Value>, block_type: &BlockType) -> Result<(LinkedList<Value>, Frame)> {
+    trace!("execute_inst_if/IN");
+
+    let mut frame = frame;
+    
+    let (end_addr, next_else) = get_end_addr(&frame);
+
+    let Some(Value::I32(cond)) = stack.pop_front() else {
+        bail!("Not found if condition");
+    };
+
+    match cond == 1 {
+        false => match next_else {
+            Some(addr) => frame.pc = addr,
+            None => frame.pc = end_addr + 1, // end following
+        }
+        true => {
+            let arity = match block_type {
+                BlockType::Void => 0,
+                BlockType::Value(v) => v.len(),
+            };
+
+            frame.labels.push_front(Label { pc: end_addr, arity, sp: stack.len() });
+        }
+    };
+
+    Ok((stack.clone(), frame))
+}
+
+fn get_end_addr(frame: &Frame) -> (usize, Option<usize>) {
+    let mut depth = 0;
+    let mut addr = frame.pc;
+
+    for inst in frame.insts.iter().skip(frame.pc) { // !!!!!
+        match inst {
+            Instruction::If(_) => { // TODO: treat other loop
+                depth += 1;
+            }
+            Instruction::End if depth > 0 => {
+                depth -= 1;
+            }
+            Instruction::End => {
+                break;
+            }
+            _ => {}
+        }
+
+        addr += 1;
+    }
+    
+    (addr, None) // TODO: treat else inst
 }
 
 #[cfg(test)]
@@ -320,7 +465,7 @@ mod executor_tests {
     use anyhow::Result;
     use crate::{binary::{
         instruction::Instruction, module::Module, 
-        types::{FuncType, ValueType}}, 
+        types::{Block, BlockType, FuncType, ValueType}}, 
         execution::{runtime::Runtime, 
             store::{ExternalFuncInst, FuncInst, InternalFuncInst, MemoryInst, Store, PPAGE_SIZE}, 
             value::{Label, Value}
@@ -430,6 +575,55 @@ mod executor_tests {
 
         assert_eq!(42, instance.store.memories[0].data[10]);
         Ok(())
+    }
+
+    #[test]
+    fn execute_return_fn() -> Result<()> {
+        let wasm = wat::parse_str(r#"(module (func (result i32) (i32.const 11) (i32.const 22) (return (i32.const 33))))"#)?;
+        let mut instance = Runtime::instanciate(wasm)?;
+
+        assert_eq!(Some(Value::I32(33)), instance.call_with_index(0, vec![])?);
+
+        assert_eq!(0, instance.stack.len());
+        Ok(())
+    }
+
+    #[test]
+    fn execute_if_true() -> Result<()> {
+        let wasm = wat::parse_str(r#"
+        (module (func (result i32) 
+            (i32.const 1) 
+            (if 
+                (then (return (i32.const 22)))
+            )
+            (return (i32.const 33))
+        ))
+        "#)?;
+        let mut instance = Runtime::instanciate(wasm)?;
+
+        assert_eq!(Some(Value::I32(22)), instance.call_with_index(0, vec![])?);
+
+        assert_eq!(0, instance.stack.len());
+        Ok(())
+    }
+
+    #[test]
+    fn execute_if_false() -> Result<()> {
+        let wasm = wat::parse_str(r#"
+        (module (func (result i32) 
+            (i32.const 0) 
+            (if 
+                (then (return (i32.const 22)))
+            )
+            (return (i32.const 33))
+        ))
+        "#)?;
+        let mut instance = Runtime::instanciate(wasm)?;
+
+        assert_eq!(Some(Value::I32(33)), instance.call_with_index(0, vec![])?);
+
+        assert_eq!(0, instance.stack.len());
+        Ok(())        
     }
 
     #[test]
@@ -737,81 +931,169 @@ mod executor_tests {
     }
 
     #[test]
-    fn eval_return_from_fn() -> Result<()> {
-        let mut stack = LinkedList::<Value>::from([Value::I32(42), Value::I32(100), Value::I64(1024), Value::I32(42)]);
-        let frame = Frame { 
-            arity: 1, sp: 0, 
-            ..Default::default() 
+    fn eval_inst_end_from_fn_noreturn() -> Result<()> {
+        let mut stack = LinkedList::<Value>::from([Value::I32(42), Value::I32(100), Value::I64(1024), Value::I32(44)]);
+        // Labelが積まれていない状態でEND命令を評価する場合、関数からの脱出とみなす
+        let mut frame = Frame { 
+            labels: LinkedList::default(),
+            arity: 0, sp: 0, 
+            ..Default::default()
         };
-        let mut call_stack = LinkedList::<Frame>::from([frame, Frame::default()]);
+        let mut call_stack = LinkedList::<Frame>::from([Frame::default()]);
 
-        let (next_stack, next_call_stack) = super::execute_inst_return_from_fn(&mut stack, &mut call_stack)?;
+        let (next_stack, next_frame) = super::execute_inst_end(&mut frame, &mut stack, &mut call_stack)?;
         
-        assert_eq!(1, next_stack.len());
-        assert_eq!(vec![Value::I32(42)], stack.into_iter().collect::<Vec<_>>());
+        assert_eq!(0, next_stack.len());
+        assert_eq!(0, call_stack.len());
+        assert_eq!(Some(Frame::default()), next_frame);
 
-        assert_eq!(1, next_call_stack.len());
-        assert_eq!(vec![Frame::default()], next_call_stack.into_iter().collect::<Vec<_>>());
-
-        // assert_eq!(Frame { arity: 1, sp: 0, ..Default::default() }, frame);
-        todo!();
         Ok(())
     }
 
     #[test]
-    fn eval_return_from_block() -> Result<()> {
-        let mut stack = LinkedList::<Value>::from([Value::I32(42), Value::I32(100), Value::I64(1024), Value::I32(42)]);
-        let frame = Frame { 
+    fn eval_inst_end_from_block() -> Result<()> {
+        let mut stack = LinkedList::<Value>::from([Value::I32(42), Value::I32(100), Value::I64(1024), Value::I32(44)]);
+        let mut frame = Frame { 
             labels: LinkedList::from([
-                Label { arity: 1, sp: 1 }, 
+                Label { pc: 13, arity: 1, sp: 1 }, 
                 Label::default(), 
             ]), 
             arity: 0, sp: 0, 
-            ..Default::default() 
+            ..Default::default()
         };
-        let mut call_stack = LinkedList::<Frame>::from([frame, Frame::default()]);
-        let mut frame = call_stack.front_mut().unwrap();
+        let mut call_stack = LinkedList::<Frame>::from([Frame::default()]);
 
-        let next_stack = super::execute_inst_return_from_block(&mut stack, &mut frame)?;
+        let (next_stack, next_frame) = super::execute_inst_end(&mut frame, &mut stack, &mut call_stack)?;
         
-        // assert_eq!(3, next_stack.len());
-        // assert_eq!(vec![Value::I32(42), Value::I64(1024), Value::I32(42)], stack.into_iter().collect::<Vec<_>>());
-        todo!();
-        // assert_eq!(1, next_frame_labels.len());
-        // assert_eq!(vec![Label::default()], next_frame_labels.into_iter().collect::<Vec<_>>());
+        assert_eq!(2, next_stack.len());
+        assert_eq!(vec![Value::I32(42), Value::I32(44)], next_stack.into_iter().collect::<Vec<_>>());
+
+        assert_eq!(1, call_stack.len());
+        assert_eq!(vec![Frame::default()], call_stack.into_iter().collect::<Vec<_>>());
+
+        assert_eq!(Some(Frame { labels: LinkedList::from([Label::default()]), pc: 13, arity: 0, sp: 0, ..Default::default() }), next_frame);
 
         Ok(())
     }
 
     #[test]
-    fn eval_return_void_from_block() -> Result<()> {
-        let mut stack = LinkedList::<Value>::from([Value::I32(42), Value::I32(100), Value::I64(1024), Value::I32(42)]);
-        let frame = Frame { 
+    fn eval_inst_end_from_block_noreturn() -> Result<()> {
+        let mut stack = LinkedList::<Value>::from([Value::I32(42), Value::I32(100), Value::I64(1024), Value::I32(44)]);
+        let mut frame = Frame { 
             labels: LinkedList::from([
-                Label { arity: 0, sp: 1, }, 
+                Label { pc: 99, arity: 0, sp: 1, }, 
                 Label::default(), 
             ]), 
             arity: 1, sp: 0, 
             ..Default::default() 
         };
-        let mut call_stack = LinkedList::<Frame>::from([frame, Frame::default()]);
-        let mut frame = call_stack.front_mut().unwrap();
+        let mut call_stack = LinkedList::<Frame>::from([Frame::default()]);
 
-        let (next_stack, next_call_stack) = super::execute_inst_return_from_block(&mut stack, &mut frame)?;
+        let (next_stack, next_frame) = super::execute_inst_end(&mut frame, &mut stack, &mut call_stack)?;
         
-        assert_eq!(3, next_stack.len());
-        assert_eq!(vec![Value::I32(100), Value::I64(1024), Value::I32(42)], stack.into_iter().collect::<Vec<_>>());
+        assert_eq!(1, next_stack.len());
+        assert_eq!(vec![Value::I32(44)], next_stack.into_iter().collect::<Vec<_>>());
 
-        assert_eq!(2, next_call_stack.len());
-        // assert_eq!(call_stack, next_call_stack);
-        todo!();
-        // assert_eq!(Frame { labels: LinkedList::from([Label::default()]), arity: 1, sp: 1, ..Default::default() }, frame);
+        assert_eq!(1, call_stack.len());
+        assert_eq!(vec![Frame::default()], call_stack.into_iter().collect::<Vec<_>>());
+
+        assert_eq!(Some(Frame { labels: LinkedList::from([Label::default()]), pc: 99, arity: 1, sp: 0, ..Default::default() }), next_frame);
         Ok(())
     }
 
     #[test]
-    fn eval_if_block() -> Result<()> {
-        todo!()
+    fn eval_inst_return_from_fn() -> Result<()> {
+        let mut stack = LinkedList::<Value>::from([Value::I32(42), Value::I32(100), Value::I64(1024), Value::I32(44)]);
+        let mut frame = Frame { 
+            arity: 1, sp: 0, 
+            ..Default::default() 
+        };
+        let mut call_stack = LinkedList::<Frame>::from([Frame::default()]);
+
+        let (next_stack, next_frame) = super::execute_inst_return(&mut frame, &mut stack, &mut call_stack)?;
+        
+        assert_eq!(1, next_stack.len());
+        assert_eq!(vec![Value::I32(42)], next_stack.into_iter().collect::<Vec<_>>());
+
+        assert_eq!(0, call_stack.len());
+        assert_eq!(Some(Frame::default()), next_frame);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_inst_return_void_from_fn() -> Result<()> {
+        let mut stack = LinkedList::<Value>::from([Value::I32(42), Value::I32(100), Value::I64(1024), Value::I32(44)]);
+        let mut frame = Frame { 
+            arity: 0, sp: 0, 
+            ..Default::default() 
+        };
+        let mut call_stack = LinkedList::<Frame>::from([Frame::default()]);
+
+        let (next_stack, next_frame) = super::execute_inst_return(&mut frame, &mut stack, &mut call_stack)?;
+        
+        assert_eq!(0, next_stack.len());
+        assert_eq!(0, call_stack.len());
+        assert_eq!(Some(Frame::default()), next_frame);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_inst_if_true() -> Result<()> {
+        let mut stack = LinkedList::<Value>::from([Value::I32(1)]);
+        let frame = Frame{ 
+            pc: 2,
+            insts: vec![
+                Instruction::I32Const(1),
+                Instruction::If(Block(BlockType::Void)),
+                Instruction::I32Const(20),
+                Instruction::If(Block(BlockType::Void)),
+                Instruction::I32Const(30),
+                Instruction::End,
+                Instruction::End,
+                Instruction::I32Const(40),
+            ],
+            ..Default::default() 
+        };
+
+        let (next_stack, next_frame) = super::execute_inst_if(frame, &mut stack, &BlockType::Void)?;
+
+        assert_eq!(0, next_stack.len());
+
+        assert_eq!(2, next_frame.pc);
+        assert_eq!(0, next_frame.sp);
+        assert_eq!(0, next_frame.arity);
+        assert_eq!(1, next_frame.labels.len());
+        assert_eq!(Some(&Label { pc: 6, sp: 0, arity: 0 }), next_frame.labels.front());
+        Ok(())
+    }
+
+    #[test]
+    fn eval_inst_if_false() -> Result<()> {
+        let mut stack = LinkedList::<Value>::from([Value::I32(0)]);
+        let frame = Frame{ 
+            pc: 2,
+            insts: vec![
+                Instruction::I32Const(0),
+                Instruction::If(Block(BlockType::Void)),
+                Instruction::I32Const(20),
+                Instruction::If(Block(BlockType::Void)),
+                Instruction::I32Const(30),
+                Instruction::End,
+                Instruction::End,
+                Instruction::I32Const(40),
+            ],
+            ..Default::default() 
+        };
+
+        let (next_stack, next_frame) = super::execute_inst_if(frame, &mut stack, &BlockType::Void)?;
+
+        assert_eq!(0, next_stack.len());
+
+        assert_eq!(7, next_frame.pc);
+        assert_eq!(0, next_frame.sp);
+        assert_eq!(0, next_frame.arity);
+        assert_eq!(0, next_frame.labels.len());
+        Ok(())
     }
 }
 
