@@ -6,23 +6,11 @@ use tracing::{instrument, trace, Level};
 use crate::binary::{module::Module, types::{Instruction, Block, ExportDesc}};
 
 use super::{
-    store::{ExternalFuncInst, FuncInst, InternalFuncInst, Store}, 
-    value::{Label, Value},
-    instruction::*,
-    wasi::WasiSnapshotPreview1
+    instruction::*, store::{ExternalFuncInst, FuncInst, InternalFuncInst, MemoryInst, Store}, value::Value, wasi::WasiSnapshotPreview1
 };
 
 type ExtFn = Box<dyn FnMut(&mut Store, Vec<Value>) -> Result<Option<Value>>>;
-
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
-pub struct Frame {
-    pub pc: usize,
-    pub insts: Vec<Instruction>,
-    pub locals: Vec<Value>,
-    pub arity: usize,
-    pub sp: usize,
-    pub labels: LinkedList<Label>,
-}
+type CallStack = LinkedList<Frame>;
 
 #[derive(Default)]
 pub struct Runtime {
@@ -132,25 +120,6 @@ impl Runtime {
             frame.pc += 1;
             
             match inst {
-                Instruction::End => {
-                    let (next_stack, next_frame) = execute_inst_end(frame, &mut self.stack, &mut self.call_stack)?;
-
-                    self.stack = next_stack;
-                    self.current_frame = next_frame;
-
-                    // self.stack = rewind_stack(&mut self.stack, sp, arity)?;
-
-                    // // フレームを巻き戻す
-                    // if let Some(next_frame) = self.call_stack.pop_front() {
-                    //     self.current_frame = Some(next_frame);
-                    // };
-                }
-                Instruction::LocalGet(index) => execute_inst_push_from_local(frame, &mut self.stack, *index)?,
-                Instruction::LocalSet(index) => execute_inst_pop_to_local(frame, &mut self.stack, *index)?,
-                Instruction::I32Const(value) => execute_inst_i32_const(frame, &mut self.stack, *value)?,
-                Instruction::I32Add => execute_inst_add(frame, &mut self.stack)?,
-                Instruction::I32Sub => execute_inst_sub(frame, &mut self.stack)?,
-                Instruction::I32LtS => execute_inst_lt(frame, &mut self.stack)?,
                 Instruction::Call(index) => {
                     let fn_index = (*index as usize).clone();
                     let count = get_func_arg_count(&self.store.fns, *index)?;
@@ -162,21 +131,12 @@ impl Runtime {
                         self.stack.push_front(ret_value);
                     }
                 }
-                Instruction::If(Block(block_type)) => {
-                    let (next_stack, next_frame) = execute_inst_if(frame.clone(), &mut self.stack, block_type)?;
-
-                    self.stack = next_stack;
-                    self.current_frame = Some(next_frame);
-                }                   
-                Instruction::Return => {
-                    let (next_stack, next_frame) = execute_inst_return(frame, &mut self.stack, &mut self.call_stack)?;
-
-                    self.stack = next_stack;
+                _ => {
+                    let EvalResultContext { next_frame, next_stack } = execute_inst(&inst, frame.clone(), &mut self.stack, &mut self.call_stack, &mut self.store.memories)?;
                     self.current_frame = next_frame;
+
+                    if let Some(stack) = next_stack { self.stack = stack; }
                 }
-                Instruction::I32Store { offset, .. } => {
-                    execute_inst_i32_store(frame, &mut self.stack, &mut self.store.memories, *offset)?
-                } 
             };
         }
 
@@ -236,6 +196,24 @@ impl Runtime {
         self.import_fns.insert((mod_name.into(), fn_name.into()), Box::new(call));
 
         Ok(())
+    }
+}
+
+fn execute_inst(inst: &Instruction, frame: Frame, stack: &mut Stack, call_stack: &mut CallStack, memory_pages: &mut [MemoryInst]) -> Result<EvalResultContext> {
+    match inst {
+        Instruction::End => execute_inst_end(frame, stack, call_stack),
+        Instruction::LocalGet(index) => execute_inst_push_from_local(frame, stack, *index),
+        Instruction::LocalSet(index) => execute_inst_pop_to_local(frame, stack, *index),
+        Instruction::I32Const(value) => execute_inst_i32_const(frame, stack, *value),
+        Instruction::I32Add => execute_inst_add(frame, stack),
+        Instruction::I32Sub => execute_inst_sub(frame, stack),
+        Instruction::I32LtS => execute_inst_lt(frame, stack),
+        Instruction::If(Block(block_type)) => execute_inst_if(frame.clone(), stack, block_type),
+        Instruction::Return => execute_inst_return(frame, stack, call_stack),
+        Instruction::I32Store { offset, .. } => execute_inst_i32_store(frame, stack, memory_pages, *offset),
+        Instruction::Call(_) => {
+            bail!("Already processed");
+        }
     }
 }
 
