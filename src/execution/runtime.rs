@@ -3,7 +3,7 @@ use std::collections::{HashMap, LinkedList};
 use anyhow::{bail, Result};
 use tracing::{instrument, trace, Level};
 
-use crate::binary::{instruction::Instruction, module::Module, types::{Block, BlockType, ExportDesc}};
+use crate::binary::{module::Module, types::{Instruction, Block, BlockType, ExportDesc}};
 
 use super::{store::{ExternalFuncInst, FuncInst, InternalFuncInst, MemoryInst, Store}, value::{Label, Value}, wasi::WasiSnapshotPreview1};
 
@@ -464,8 +464,8 @@ mod executor_tests {
 
     use anyhow::Result;
     use crate::{binary::{
-        instruction::Instruction, module::Module, 
-        types::{Block, BlockType, FuncType, ValueType}}, 
+        module::Module, 
+        types::{Instruction, Block, BlockType, FuncType, ValueType}}, 
         execution::{runtime::Runtime, 
             store::{ExternalFuncInst, FuncInst, InternalFuncInst, MemoryInst, Store, PPAGE_SIZE}, 
             value::{Label, Value}

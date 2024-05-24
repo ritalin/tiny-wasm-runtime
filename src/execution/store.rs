@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::binary::{instruction::Instruction, types::{Export, FuncType, ValueType}};
+use crate::binary::{types::Instruction, types::{Export, FuncType, ValueType}};
 use anyhow::{bail, Result};
 
 pub const PPAGE_SIZE: usize = (1 << 16) - 1;

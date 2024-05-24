@@ -3,7 +3,12 @@ use nom::{bytes::complete::{tag, take}, multi::many0, number::complete::{le_u32,
 use nom_leb128::{leb128_i32, leb128_u32};
 use num_traits::FromPrimitive;
 
-use super::{instruction::Instruction, opcode::Opcode, section::{Function, FunctionLocal}, types::{Block, BlockType, Data, Export, ExportDesc, FuncType, Import, ImportDesc, Memory, ValueType}};
+use super::{
+    types::Instruction, 
+    opcode::Opcode, 
+    section::{Function, FunctionLocal}, 
+    types::{Block, BlockType, Data, Export, ExportDesc, FuncType, Import, ImportDesc, Memory, ValueType}
+};
 
 const WASM_MAGIC: &str = "\0asm";
 
@@ -372,7 +377,10 @@ fn decode_data_section(input: &[u8]) -> IResult<&[u8], Vec<Data>> {
 
 #[cfg(test)]
 mod decoder_tests {
-    use crate::binary::{instruction::Instruction, module::Module, section::{Function, FunctionLocal, SectionCode}, types::{Block, BlockType, Data, Export, ExportDesc, FuncType, Import, ImportDesc, Memory, ValueType}};
+    use crate::binary::{
+        module::Module, 
+        section::{Function, FunctionLocal, SectionCode}, 
+        types::{Instruction, Block, BlockType, Data, Export, ExportDesc, FuncType, Import, ImportDesc, Memory, ValueType}};
     use anyhow::Result;
 
     #[test]
