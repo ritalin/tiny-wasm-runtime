@@ -16,7 +16,6 @@ pub struct Runtime {
     pub store: Store,
     pub stack: LinkedList<Value>,
     pub call_stack: LinkedList<Frame>,
-    pub current_frame: Option<Frame>,
     pub import_fns: HashMap<(String, String), ExtFn>,
     pub wasi_fns: Option<WasiSnapshotPreview1>,
 }
@@ -27,7 +26,6 @@ impl std::fmt::Debug for Runtime {
             .field("store", &self.store)
             .field("stack", &self.stack)
             .field("call_stack", &self.call_stack)
-            .field("current_frame", &self.current_frame)
             .field("wasi_fns", &self.wasi_fns)
         .finish()
     }
@@ -98,7 +96,6 @@ impl Runtime {
                 
                 let (frame, next_stack) = make_frame(&mut self.stack, func);
 
-                self.current_frame = Some(frame.clone());
                 self.stack = next_stack;
 
                 self.execute_internal_function(frame)
