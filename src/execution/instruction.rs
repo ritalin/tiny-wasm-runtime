@@ -3,7 +3,6 @@ use anyhow::{bail, Result};
 use tracing::{instrument, trace, Level};
 
 use crate::binary::types::{BlockType, Instruction};
-
 use super::{store::{InternalFuncInst, MemoryInst}, value::{Label, Value}};
 
 pub type Stack = LinkedList<Value>;

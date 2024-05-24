@@ -4,7 +4,6 @@ use anyhow::{bail, Result};
 use tracing::{instrument, trace, Level};
 
 use crate::binary::{module::Module, types::{Instruction, Block, ExportDesc}};
-
 use super::{
     instruction::*, store::{ExternalFuncInst, FuncInst, InternalFuncInst, MemoryInst, Store}, value::Value, wasi::WasiSnapshotPreview1
 };
