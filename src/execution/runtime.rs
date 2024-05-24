@@ -10,7 +10,6 @@ use super::{
 };
 
 type ExtFn = Box<dyn FnMut(&mut Store, Vec<Value>) -> Result<Option<Value>>>;
-type CallStack = LinkedList<Frame>;
 
 #[derive(Default)]
 pub struct Runtime {
@@ -69,9 +68,15 @@ impl Runtime {
             }
         }
     }
-
+    
     #[instrument(skip(self) level=Level::TRACE)]
     pub fn call_with_index(&mut self, fn_index: usize, args: Vec<Value>) -> Result<Option<Value>> {
+        let (ret_value, _) = self.call_internal(fn_index, args, None)?;
+
+        Ok(ret_value)
+    }
+
+    pub fn call_internal(&mut self, fn_index: usize, args: Vec<Value>, current_frame: Option<Frame>) -> Result<(Option<Value>, Option<Frame>)> {
         trace!("(CAll/IN)");
 
         let Some(func) = self.store.fns.get(fn_index) else {
@@ -87,10 +92,16 @@ impl Runtime {
                     self.stack.push_front(arg);
                 }
         
+                if let Some(ref frame) = current_frame {
+                    self.call_stack.push_front(frame.clone());
+                }
+                
                 let (frame, next_stack) = make_frame(&mut self.stack, func);
+
+                self.current_frame = Some(frame.clone());
                 self.stack = next_stack;
 
-                self.execute_internal_call(frame)
+                self.execute_internal_function(frame)
             }
             FuncInst::External(func) => {
                 if args.len() != func.fn_type.params.len() {
@@ -100,26 +111,22 @@ impl Runtime {
                     self.stack.push_front(arg);
                 }
         
-                self.execute_ext_call(func.clone())
+                Ok((self.execute_imported_function(func.clone())?, current_frame))
             }
         }
     }
 
-    fn execute(&mut self) -> Result<()> {
+    fn execute(&mut self, mut frame: Frame) -> Result<Option<Frame>> {
         trace!("(CALL/IN)");
 
         loop {
-            let Some(frame) = self.current_frame.as_mut() else {
-                break;
-            };
-
             let Some(inst) = frame.insts.get(frame.pc) else {
                 break;
             };
 
             frame.pc += 1;
             
-            match inst {
+            let current_frame = match inst {
                 Instruction::Call(index) => {
                     let fn_index = (*index as usize).clone();
                     let count = get_func_arg_count(&self.store.fns, *index)?;
@@ -127,47 +134,57 @@ impl Runtime {
 
                     self.stack = next_stack;
 
-                    if let Some(ret_value) = self.call_with_index(fn_index, args)? {
+                    let (ret_value, next_frame) = self.call_internal(fn_index, args, Some(frame.clone()))?;
+                    
+                    if let Some(ret_value) = ret_value {
                         self.stack.push_front(ret_value);
                     }
+
+                    next_frame
                 }
                 _ => {
-                    let EvalResultContext { next_frame, next_stack } = execute_inst(&inst, frame.clone(), &mut self.stack, &mut self.call_stack, &mut self.store.memories)?;
-                    self.current_frame = next_frame;
+                    let EvalResultContext { next_frame, next_stack } = execute_inst(&inst, frame.clone(), &mut self.stack, &mut self.store.memories)?;
 
                     if let Some(stack) = next_stack { self.stack = stack; }
+
+                    next_frame
+                }
+            };
+
+            // 関数内の命令が消化し切った場合はループを抜ける
+            match current_frame {
+                Some(current_frame) => {
+                    frame = current_frame;
+                }
+                None => { 
+                    break; 
                 }
             };
         }
 
-        Ok(())
+        Ok(self.call_stack.pop_front())
     }
 
-    fn execute_internal_call(&mut self, next_frame: Frame) -> Result<Option<Value>> {
-        if let Some(ref frame) = self.current_frame {
-            self.call_stack.push_front(frame.clone());
-        }
-        self.current_frame = Some(next_frame.clone());
-
+    fn execute_internal_function(&mut self, next_frame: Frame) -> Result<(Option<Value>, Option<Frame>)> {
         let arity = next_frame.arity;
 
-        match  self.execute() {
+        match self.execute(next_frame) {
             Err(err) => {
                 self.call_stack = LinkedList::default();
                 self.stack = LinkedList::default();
                 bail!("Failed to call: {err}");
             }
-            Ok(_) if arity > 0 => {
+            Ok(next_frame) if arity > 0 => {
                 match self.stack.pop_front() {
                     None => bail!("Not found return value from internal call"),
-                    Some(value) => Ok(Some(value))
+                    Some(value) => Ok((Some(value), next_frame))
                 }
             }
-            Ok(_) => Ok(None),
+            Ok(next_frame) => Ok((None, next_frame)),
         }
     }
 
-    fn execute_ext_call(&mut self, func: ExternalFuncInst) -> Result<Option<Value>> {
+    fn execute_imported_function(&mut self, func: ExternalFuncInst) -> Result<Option<Value>> {
         let (args, next_stack) = pop_args(&mut self.stack, func.fn_type.params.len());
         self.stack = next_stack;
 
@@ -186,8 +203,7 @@ impl Runtime {
         
                 call(&mut self.store, args)
             }
-        }
-        
+        }  
     }
 
     pub fn add_import(&mut self, mod_name: impl Into<String>, fn_name: impl Into<String>, 
@@ -199,9 +215,9 @@ impl Runtime {
     }
 }
 
-fn execute_inst(inst: &Instruction, frame: Frame, stack: &mut Stack, call_stack: &mut CallStack, memory_pages: &mut [MemoryInst]) -> Result<EvalResultContext> {
+fn execute_inst(inst: &Instruction, frame: Frame, stack: &mut Stack, memory_pages: &mut [MemoryInst]) -> Result<EvalResultContext> {
     match inst {
-        Instruction::End => execute_inst_end(frame, stack, call_stack),
+        Instruction::End => execute_inst_end(frame, stack),
         Instruction::LocalGet(index) => execute_inst_push_from_local(frame, stack, *index),
         Instruction::LocalSet(index) => execute_inst_pop_to_local(frame, stack, *index),
         Instruction::I32Const(value) => execute_inst_i32_const(frame, stack, *value),
@@ -209,7 +225,7 @@ fn execute_inst(inst: &Instruction, frame: Frame, stack: &mut Stack, call_stack:
         Instruction::I32Sub => execute_inst_sub(frame, stack),
         Instruction::I32LtS => execute_inst_lt(frame, stack),
         Instruction::If(Block(block_type)) => execute_inst_if(frame.clone(), stack, block_type),
-        Instruction::Return => execute_inst_return(frame, stack, call_stack),
+        Instruction::Return => execute_inst_return(frame, stack),
         Instruction::I32Store { offset, .. } => execute_inst_i32_store(frame, stack, memory_pages, *offset),
         Instruction::Call(_) => {
             bail!("Already processed");
@@ -242,7 +258,7 @@ mod executor_tests {
 
         let mut rt = Runtime::instanciate(wasm)?;
 
-        rt.execute()?;
+        rt.call_with_index(0, vec![])?;
 
         assert_eq!(0, rt.call_stack.len());
         assert_eq!(0, rt.stack.len());
@@ -321,7 +337,15 @@ mod executor_tests {
 
     #[test]
     fn execute_pop_to_local() -> Result<()> {
-        let wasm = wat::parse_str(r#"(module (func (result i32) (local $x i32) (local.set $x (i32.const -42)) (local.get 0)))"#)?;
+        let wasm = wat::parse_str(r#"
+        (module 
+            (func (result i32) 
+                (local $x i32) 
+                (local.set $x (i32.const -42)) 
+                (local.get 0)
+            )
+        )
+        "#)?;
         let mut instance = Runtime::instanciate(wasm)?;
         
         assert_eq!(Some(Value::I32(-42)), instance.call_with_index(0, vec![])?);
@@ -399,9 +423,11 @@ mod executor_tests {
         };
 
         let mut rt = Runtime { store: Store::new(Module::default())?, ..Default::default() };
-        let ret_value = rt.execute_internal_call(next_frame)?;
+        let (ret_value, next_frame) = rt.execute_internal_function(next_frame)?;
 
         assert_eq!(None, ret_value);
+        assert_eq!(None, next_frame);
+
         assert_eq!(0, rt.call_stack.len());
         assert_eq!(0, rt.stack.len());
         Ok(())    
@@ -420,9 +446,11 @@ mod executor_tests {
         };
 
         let mut rt = Runtime { store: Store::new(Module::default())?, ..Default::default() };
-        let ret_value = rt.execute_internal_call(next_frame)?;
+        let (ret_value, next_frame) = rt.execute_internal_function(next_frame)?;
 
         assert_eq!(Some(Value::I32(42)), ret_value);
+        assert_eq!(None, next_frame);
+
         assert_eq!(0, rt.call_stack.len());
         assert_eq!(0, rt.stack.len());
         Ok(())

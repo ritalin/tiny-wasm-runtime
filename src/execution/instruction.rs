@@ -21,6 +21,7 @@ pub struct Frame {
 
 #[derive(Default)]
 pub struct EvalResultContext {
+    // 関数内の命令がまだ続く場合、Some(Frame)を、消化し切った場合はNoneを割り当てる
     pub next_frame: Option<Frame>,
     pub next_stack: Option<Stack>
 }
@@ -150,7 +151,7 @@ pub fn execute_inst_i32_store(frame: Frame, stack: &mut Stack, memories: &mut [M
 }
 
 #[instrument(level=Level::TRACE)]
-pub fn execute_inst_end(frame: Frame, stack: &mut Stack, call_stack: &mut CallStack) -> Result<EvalResultContext> {
+pub fn execute_inst_end(frame: Frame, stack: &mut Stack) -> Result<EvalResultContext> {
     let mut frame = frame;
 
     match frame.labels.pop_front() {
@@ -163,15 +164,16 @@ pub fn execute_inst_end(frame: Frame, stack: &mut Stack, call_stack: &mut CallSt
         }
         None => {
             let next_stack = rewind_stack(stack, frame.sp, frame.arity)?;
-            Ok(EvalResultContext { next_frame: call_stack.pop_front(), next_stack: Some(next_stack) })
+            Ok(EvalResultContext { next_frame: None, next_stack: Some(next_stack) })
         }
     }
 }
 
 #[instrument(level=Level::TRACE)]
-pub fn execute_inst_return(frame: Frame, stack: &mut Stack, call_stack: &mut CallStack) -> Result<EvalResultContext> {
+pub fn execute_inst_return(frame: Frame, stack: &mut Stack) -> Result<EvalResultContext> {
     let next_stack = rewind_stack(stack, frame.sp, frame.arity)?;
-    Ok(EvalResultContext { next_frame: call_stack.pop_front(), next_stack: Some(next_stack) })
+
+    Ok(EvalResultContext { next_frame: None, next_stack: Some(next_stack) })
 }
 
 #[tracing::instrument(level=tracing::Level::TRACE)]
@@ -228,7 +230,7 @@ fn get_end_addr(frame: &Frame) -> (usize, Option<usize>) {
     (addr, None) // TODO: treat else inst
 }
 
-fn rewind_stack(stack: &mut Stack, sp: usize, arity: usize) -> Result<Stack> {
+pub fn rewind_stack(stack: &mut Stack, sp: usize, arity: usize) -> Result<Stack> {
     let next_stack = match arity {
         0 => {
             // 戻り値なし
@@ -258,7 +260,7 @@ mod inst_tests {
     use crate::{
         binary::{module::Module, types::{Block, BlockType, Instruction}}, 
         execution::{
-            instruction::{CallStack, EvalResultContext, Frame}, store::{FuncInst, MemoryInst, Store}, 
+            instruction::{EvalResultContext, Frame}, store::{FuncInst, MemoryInst, Store}, 
             value::{Label, Value}
         }
     };
@@ -478,15 +480,14 @@ mod inst_tests {
             arity: 0, sp: 0, 
             ..Default::default()
         };
-        let mut call_stack = CallStack::from([Frame::default()]);
 
-        let EvalResultContext {next_stack, next_frame } = super::execute_inst_end(frame, &mut stack, &mut call_stack)?;
+        let EvalResultContext {next_stack, next_frame } = super::execute_inst_end(frame, &mut stack)?;
         
         let next_stack = next_stack.unwrap();
         
         assert_eq!(0, next_stack.len());
-        assert_eq!(0, call_stack.len());
-        assert_eq!(Some(Frame::default()), next_frame);
+
+        assert_eq!(None, next_frame);
 
         Ok(())
     }
@@ -502,18 +503,14 @@ mod inst_tests {
             arity: 0, sp: 0, 
             ..Default::default()
         };
-        let mut call_stack = LinkedList::<Frame>::from([Frame::default()]);
 
-        let EvalResultContext {next_stack, next_frame } = super::execute_inst_end(frame, &mut stack, &mut call_stack)?;
+        let EvalResultContext {next_stack, next_frame } = super::execute_inst_end(frame, &mut stack)?;
         
         let next_frame = next_frame.unwrap();
         let next_stack = next_stack.unwrap();
         
         assert_eq!(2, next_stack.len());
         assert_eq!(vec![Value::I32(42), Value::I32(44)], next_stack.into_iter().collect::<Vec<_>>());
-
-        assert_eq!(1, call_stack.len());
-        assert_eq!(vec![Frame::default()], call_stack.into_iter().collect::<Vec<_>>());
 
         assert_eq!(Frame { labels: LinkedList::from([Label::default()]), pc: 13, arity: 0, sp: 0, ..Default::default() }, next_frame);
 
@@ -531,18 +528,14 @@ mod inst_tests {
             arity: 1, sp: 0, 
             ..Default::default() 
         };
-        let mut call_stack = LinkedList::<Frame>::from([Frame::default()]);
 
-        let EvalResultContext {next_stack, next_frame } = super::execute_inst_end(frame, &mut stack, &mut call_stack)?;
+        let EvalResultContext {next_stack, next_frame } = super::execute_inst_end(frame, &mut stack)?;
         
         let next_frame = next_frame.unwrap();
         let next_stack = next_stack.unwrap();
         
         assert_eq!(1, next_stack.len());
         assert_eq!(vec![Value::I32(44)], next_stack.into_iter().collect::<Vec<_>>());
-
-        assert_eq!(1, call_stack.len());
-        assert_eq!(vec![Frame::default()], call_stack.into_iter().collect::<Vec<_>>());
 
         assert_eq!(Frame { labels: LinkedList::from([Label::default()]), pc: 99, arity: 1, sp: 0, ..Default::default() }, next_frame);
         Ok(())
@@ -555,17 +548,15 @@ mod inst_tests {
             arity: 1, sp: 0, 
             ..Default::default() 
         };
-        let mut call_stack = LinkedList::<Frame>::from([Frame::default()]);
 
-        let EvalResultContext {next_stack, next_frame } = super::execute_inst_return(frame, &mut stack, &mut call_stack)?;
+        let EvalResultContext {next_stack, next_frame } = super::execute_inst_return(frame, &mut stack)?;
         
         let next_stack = next_stack.unwrap();
         
         assert_eq!(1, next_stack.len());
         assert_eq!(vec![Value::I32(42)], next_stack.into_iter().collect::<Vec<_>>());
 
-        assert_eq!(0, call_stack.len());
-        assert_eq!(Some(Frame::default()), next_frame);
+        assert_eq!(None, next_frame);
         Ok(())
     }
 
@@ -576,15 +567,13 @@ mod inst_tests {
             arity: 0, sp: 0, 
             ..Default::default() 
         };
-        let mut call_stack = LinkedList::<Frame>::from([Frame::default()]);
 
-        let EvalResultContext {next_stack, next_frame } = super::execute_inst_return(frame, &mut stack, &mut call_stack)?;
+        let EvalResultContext {next_stack, next_frame } = super::execute_inst_return(frame, &mut stack)?;
         
         let next_stack = next_stack.unwrap();
         
         assert_eq!(0, next_stack.len());
-        assert_eq!(0, call_stack.len());
-        assert_eq!(Some(Frame::default()), next_frame);
+        assert_eq!(None, next_frame);
         Ok(())
     }
 
