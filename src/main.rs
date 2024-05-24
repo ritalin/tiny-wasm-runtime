@@ -35,7 +35,7 @@ fn main() -> Result<()> {
     let mut rt = Runtime::instanciate_with_wasi(wasm, wasi)?;
     
     tracing::info!("call entry point (_start)");
-    let value = rt.call("_start", vec![Value::I32(10)])?;
+    let value = rt.call("_start", config.args.into_iter().map(Value::I32).collect())?;
 
     if let Some(value) = value {
         println!("{value}");
