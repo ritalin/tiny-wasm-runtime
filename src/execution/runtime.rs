@@ -1,7 +1,7 @@
 use std::collections::{HashMap, LinkedList};
 
 use anyhow::{bail, Result};
-use tracing::trace;
+use tracing::{instrument, trace, Level};
 
 use crate::binary::{module::Module, types::{Instruction, Block, ExportDesc}};
 
@@ -82,7 +82,7 @@ impl Runtime {
         }
     }
 
-    #[tracing::instrument(skip(self) level=tracing::Level::TRACE)]
+    #[instrument(skip(self) level=Level::TRACE)]
     pub fn call_with_index(&mut self, fn_index: usize, args: Vec<Value>) -> Result<Option<Value>> {
         trace!("(CAll/IN)");
 
