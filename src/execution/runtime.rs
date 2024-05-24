@@ -90,7 +90,7 @@ impl Runtime {
                 let (frame, next_stack) = make_frame(&mut self.stack, func);
                 self.stack = next_stack;
 
-                self.execute_inst_call(frame)
+                self.execute_internal_call(frame)
             }
             FuncInst::External(func) => {
                 if args.len() != func.fn_type.params.len() {
@@ -143,7 +143,7 @@ impl Runtime {
         Ok(())
     }
 
-    fn execute_inst_call(&mut self, next_frame: Frame) -> Result<Option<Value>> {
+    fn execute_internal_call(&mut self, next_frame: Frame) -> Result<Option<Value>> {
         if let Some(ref frame) = self.current_frame {
             self.call_stack.push_front(frame.clone());
         }
@@ -399,7 +399,7 @@ mod executor_tests {
         };
 
         let mut rt = Runtime { store: Store::new(Module::default())?, ..Default::default() };
-        let ret_value = rt.execute_inst_call(next_frame)?;
+        let ret_value = rt.execute_internal_call(next_frame)?;
 
         assert_eq!(None, ret_value);
         assert_eq!(0, rt.call_stack.len());
@@ -420,7 +420,7 @@ mod executor_tests {
         };
 
         let mut rt = Runtime { store: Store::new(Module::default())?, ..Default::default() };
-        let ret_value = rt.execute_inst_call(next_frame)?;
+        let ret_value = rt.execute_internal_call(next_frame)?;
 
         assert_eq!(Some(Value::I32(42)), ret_value);
         assert_eq!(0, rt.call_stack.len());

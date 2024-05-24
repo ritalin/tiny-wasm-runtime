@@ -25,14 +25,14 @@ pub struct EvalResultContext {
     pub next_stack: Option<Stack>
 }
 
-pub fn pop_args(stack: &mut LinkedList<Value>, count: usize) -> (Vec<Value>, LinkedList<Value>) {
+pub fn pop_args(stack: &mut LinkedList<Value>, count: usize) -> (Vec<Value>, Stack) {
     let next_stack = stack.split_off(count);
     let args = stack.iter().map(Value::clone).rev().collect::<Vec<_>>();
 
     (args, next_stack)
 }
 
-pub fn make_frame(stack: &mut LinkedList<Value>, func: &InternalFuncInst) -> (Frame, LinkedList<Value>) {
+pub fn make_frame(stack: &mut Stack, func: &InternalFuncInst) -> (Frame, Stack) {
     let (args, next_stack) = pop_args(stack, func.fn_type.params.len());
 
     let locals = func.code.locals.iter().map(|lc| match lc {
@@ -53,7 +53,7 @@ pub fn make_frame(stack: &mut LinkedList<Value>, func: &InternalFuncInst) -> (Fr
 }
 
 #[instrument(level=Level::TRACE)]
-pub fn execute_inst_push_from_local(frame: Frame, stack: &mut LinkedList<Value>, index: u32) -> Result<EvalResultContext> {
+pub fn execute_inst_push_from_local(frame: Frame, stack: &mut Stack, index: u32) -> Result<EvalResultContext> {
     trace!("(CALL/IN)");
 
     let Some(value) = frame.locals.get(index as usize) else {
@@ -66,7 +66,7 @@ pub fn execute_inst_push_from_local(frame: Frame, stack: &mut LinkedList<Value>,
 }
 
 #[instrument(level=Level::TRACE)]
-pub fn execute_inst_pop_to_local(frame: Frame, stack: &mut LinkedList<Value>, index: u32) -> Result<EvalResultContext> {
+pub fn execute_inst_pop_to_local(frame: Frame, stack: &mut Stack, index: u32) -> Result<EvalResultContext> {
     trace!("(CALL/IN)");
 
     let mut frame = frame;
@@ -84,7 +84,7 @@ pub fn execute_inst_pop_to_local(frame: Frame, stack: &mut LinkedList<Value>, in
 }
 
 #[instrument(level=Level::TRACE)]
-pub fn execute_inst_i32_const(frame: Frame, stack: &mut LinkedList<Value>, value: i32) -> Result<EvalResultContext> {
+pub fn execute_inst_i32_const(frame: Frame, stack: &mut Stack, value: i32) -> Result<EvalResultContext> {
     trace!("(CALL/IN)");
 
     stack.push_front(Value::I32(value));
@@ -93,7 +93,7 @@ pub fn execute_inst_i32_const(frame: Frame, stack: &mut LinkedList<Value>, value
 }
 
 #[instrument(level=Level::TRACE)]
-pub fn execute_inst_add(frame: Frame, stack: &mut LinkedList<Value>) -> Result<EvalResultContext> {
+pub fn execute_inst_add(frame: Frame, stack: &mut Stack) -> Result<EvalResultContext> {
     trace!("(CALL/IN)");
 
     let (Some(rhs), Some(lhs)) = (stack.pop_front(), stack.pop_front()) else {
@@ -106,7 +106,7 @@ pub fn execute_inst_add(frame: Frame, stack: &mut LinkedList<Value>) -> Result<E
 }
 
 #[instrument(level=Level::TRACE)]
-pub fn execute_inst_sub(frame: Frame, stack: &mut LinkedList<Value>) -> Result<EvalResultContext> {
+pub fn execute_inst_sub(frame: Frame, stack: &mut Stack) -> Result<EvalResultContext> {
     trace!("(CALL/IN)");
 
     let (Some(rhs), Some(lhs)) = (stack.pop_front(), stack.pop_front()) else {
@@ -169,13 +169,13 @@ pub fn execute_inst_end(frame: Frame, stack: &mut Stack, call_stack: &mut CallSt
 }
 
 #[instrument(level=Level::TRACE)]
-pub fn execute_inst_return(frame: Frame, stack: &mut LinkedList<Value>, call_stack: &mut LinkedList<Frame>) -> Result<EvalResultContext> {
+pub fn execute_inst_return(frame: Frame, stack: &mut Stack, call_stack: &mut CallStack) -> Result<EvalResultContext> {
     let next_stack = rewind_stack(stack, frame.sp, frame.arity)?;
     Ok(EvalResultContext { next_frame: call_stack.pop_front(), next_stack: Some(next_stack) })
 }
 
 #[tracing::instrument(level=tracing::Level::TRACE)]
-pub fn execute_inst_if(frame: Frame, stack: &mut LinkedList<Value>, block_type: &BlockType) -> Result<EvalResultContext> {
+pub fn execute_inst_if(frame: Frame, stack: &mut Stack, block_type: &BlockType) -> Result<EvalResultContext> {
     trace!("execute_inst_if/IN");
 
     let mut frame = frame;
@@ -228,7 +228,7 @@ fn get_end_addr(frame: &Frame) -> (usize, Option<usize>) {
     (addr, None) // TODO: treat else inst
 }
 
-fn rewind_stack(stack: &mut LinkedList<Value>, sp: usize, arity: usize) -> Result<LinkedList<Value>> {
+fn rewind_stack(stack: &mut Stack, sp: usize, arity: usize) -> Result<Stack> {
     let next_stack = match arity {
         0 => {
             // 戻り値なし
@@ -258,7 +258,7 @@ mod inst_tests {
     use crate::{
         binary::{module::Module, types::{Block, BlockType, Instruction}}, 
         execution::{
-            instruction::{EvalResultContext, Frame}, store::{FuncInst, MemoryInst, Store}, 
+            instruction::{CallStack, EvalResultContext, Frame}, store::{FuncInst, MemoryInst, Store}, 
             value::{Label, Value}
         }
     };
@@ -478,7 +478,7 @@ mod inst_tests {
             arity: 0, sp: 0, 
             ..Default::default()
         };
-        let mut call_stack = LinkedList::<Frame>::from([Frame::default()]);
+        let mut call_stack = CallStack::from([Frame::default()]);
 
         let EvalResultContext {next_stack, next_frame } = super::execute_inst_end(frame, &mut stack, &mut call_stack)?;
         
