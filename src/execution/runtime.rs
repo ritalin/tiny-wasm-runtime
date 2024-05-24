@@ -14,7 +14,6 @@ type ExtFn = Box<dyn FnMut(&mut Store, Vec<Value>) -> Result<Option<Value>>>;
 #[derive(Default)]
 pub struct Runtime {
     pub store: Store,
-    pub stack: LinkedList<Value>,
     pub call_stack: LinkedList<Frame>,
     pub import_fns: HashMap<(String, String), ExtFn>,
     pub wasi_fns: Option<WasiSnapshotPreview1>,
@@ -24,7 +23,6 @@ impl std::fmt::Debug for Runtime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Runtime")
             .field("store", &self.store)
-            .field("stack", &self.stack)
             .field("call_stack", &self.call_stack)
             .field("wasi_fns", &self.wasi_fns)
         .finish()
@@ -69,12 +67,12 @@ impl Runtime {
     
     #[instrument(skip(self) level=Level::TRACE)]
     pub fn call_with_index(&mut self, fn_index: usize, args: Vec<Value>) -> Result<Option<Value>> {
-        let (ret_value, _) = self.call_internal(fn_index, args, None)?;
+        let (ret_value, _) = self.call_internal(fn_index, args, None, Stack::new())?;
 
         Ok(ret_value)
     }
 
-    pub fn call_internal(&mut self, fn_index: usize, args: Vec<Value>, current_frame: Option<Frame>) -> Result<(Option<Value>, Option<Frame>)> {
+    pub fn call_internal(&mut self, fn_index: usize, args: Vec<Value>, current_frame: Option<Frame>, mut stack: Stack) -> Result<(Option<Value>, EvalResultContext)> {
         trace!("(CAll/IN)");
 
         let Some(func) = self.store.fns.get(fn_index) else {
@@ -87,33 +85,32 @@ impl Runtime {
                     bail!("Number of function args is mismatched (args: {}, passed: {})", func.fn_type.params.len(), args.len());
                 }
                 for arg in args {
-                    self.stack.push_front(arg);
+                    stack.push_front(arg);
                 }
         
                 if let Some(ref frame) = current_frame {
                     self.call_stack.push_front(frame.clone());
                 }
                 
-                let (frame, next_stack) = make_frame(&mut self.stack, func);
+                let (frame, next_stack) = make_frame(stack, func);
 
-                self.stack = next_stack;
-
-                self.execute_internal_function(frame)
+                self.execute_internal_function(frame, next_stack)
             }
             FuncInst::External(func) => {
                 if args.len() != func.fn_type.params.len() {
                     bail!("Number of function args is mismatched");
                 }
                 for arg in args {
-                    self.stack.push_front(arg);
+                    stack.push_front(arg);
                 }
-        
-                Ok((self.execute_imported_function(func.clone())?, current_frame))
+                
+                let (ret_value, next_stack) = self.execute_imported_function(func.clone(), stack)?;
+                Ok((ret_value, EvalResultContext { next_frame: current_frame, next_stack: next_stack }))
             }
         }
     }
 
-    fn execute(&mut self, mut frame: Frame) -> Result<Option<Frame>> {
+    fn execute(&mut self, mut frame: Frame, mut stack: Stack) -> Result<EvalResultContext> {
         trace!("(CALL/IN)");
 
         loop {
@@ -123,35 +120,36 @@ impl Runtime {
 
             frame.pc += 1;
             
-            let current_frame = match inst {
+            let eval_result = match inst {
                 Instruction::Call(index) => {
                     let fn_index = (*index as usize).clone();
                     let count = get_func_arg_count(&self.store.fns, *index)?;
-                    let (args, next_stack) = pop_args(&mut self.stack, count);
+                    let (args, next_stack) = pop_args(stack, count);
 
-                    self.stack = next_stack;
-
-                    let (ret_value, next_frame) = self.call_internal(fn_index, args, Some(frame.clone()))?;
+                    let (ret_value, EvalResultContext { next_frame, mut next_stack }) = self.call_internal(fn_index, args, Some(frame.clone()), next_stack)?;
                     
                     if let Some(ret_value) = ret_value {
-                        self.stack.push_front(ret_value);
+                        next_stack.push_front(ret_value);
                     }
 
-                    next_frame
+                    EvalResultContext { next_frame, next_stack }
                 }
                 _ => {
-                    let EvalResultContext { next_frame, next_stack } = execute_inst(&inst, frame.clone(), &mut self.stack, &mut self.store.memories)?;
+                    // let EvalResultContext { next_frame, next_stack } = 
+                    execute_inst(&inst, frame.clone(), stack, &mut self.store.memories)?
 
-                    if let Some(stack) = next_stack { self.stack = stack; }
+                    // if let Some(stack) = next_stack { self.stack = stack; }
 
-                    next_frame
+                    // next_frame
                 }
             };
 
+            stack = eval_result.next_stack;
+
             // 関数内の命令が消化し切った場合はループを抜ける
-            match current_frame {
-                Some(current_frame) => {
-                    frame = current_frame;
+            match eval_result.next_frame {
+                Some(next_frame) => {
+                    frame = next_frame;
                 }
                 None => { 
                     break; 
@@ -159,48 +157,48 @@ impl Runtime {
             };
         }
 
-        Ok(self.call_stack.pop_front())
+        Ok(EvalResultContext { next_frame: self.call_stack.pop_front(), next_stack: stack })
     }
 
-    fn execute_internal_function(&mut self, next_frame: Frame) -> Result<(Option<Value>, Option<Frame>)> {
-        let arity = next_frame.arity;
+    fn execute_internal_function(&mut self, frame: Frame, stack: Stack) -> Result<(Option<Value>, EvalResultContext)> {
+        let arity = frame.arity;
 
-        match self.execute(next_frame) {
+        match self.execute(frame, stack) {
             Err(err) => {
                 self.call_stack = LinkedList::default();
-                self.stack = LinkedList::default();
                 bail!("Failed to call: {err}");
             }
-            Ok(next_frame) if arity > 0 => {
-                match self.stack.pop_front() {
+            Ok(EvalResultContext {next_frame, mut next_stack}) if arity > 0 => {
+                match next_stack.pop_front() {
                     None => bail!("Not found return value from internal call"),
-                    Some(value) => Ok((Some(value), next_frame))
+                    Some(value) => Ok((Some(value), EvalResultContext { next_frame, next_stack: next_stack }))
                 }
             }
-            Ok(next_frame) => Ok((None, next_frame)),
+            Ok(eval_result) => Ok((None, eval_result)),
         }
     }
 
-    fn execute_imported_function(&mut self, func: ExternalFuncInst) -> Result<Option<Value>> {
-        let (args, next_stack) = pop_args(&mut self.stack, func.fn_type.params.len());
-        self.stack = next_stack;
+    fn execute_imported_function(&mut self, func: ExternalFuncInst, stack: Stack) -> Result<(Option<Value>, Stack)> {
+        let (args, next_stack) = pop_args(stack, func.fn_type.params.len());
 
-        match func.mod_name.as_str() {
+        let ret_value = match func.mod_name.as_str() {
             "wasi_snapshot_preview1" => {
                 let Some(ref wasi) = self.wasi_fns else {
                     bail!("Unsupported WASI");
                 };
 
-                wasi.invoke(&mut self.store, &func.fn_name, args)
+                wasi.invoke(&mut self.store, &func.fn_name, args)?
             }
             _ => {
                 let Some(call) = self.import_fns.get_mut(&(func.mod_name.to_string(), func.fn_name.to_string())) else {
                     bail!("Ext function is not found");
                 };
         
-                call(&mut self.store, args)
+                call(&mut self.store, args)?
             }
-        }  
+        };
+
+        Ok((ret_value, next_stack))
     }
 
     pub fn add_import(&mut self, mod_name: impl Into<String>, fn_name: impl Into<String>, 
@@ -212,7 +210,7 @@ impl Runtime {
     }
 }
 
-fn execute_inst(inst: &Instruction, frame: Frame, stack: &mut Stack, memory_pages: &mut [MemoryInst]) -> Result<EvalResultContext> {
+fn execute_inst(inst: &Instruction, frame: Frame, stack: Stack, memory_pages: &mut [MemoryInst]) -> Result<EvalResultContext> {
     match inst {
         Instruction::End => execute_inst_end(frame, stack),
         Instruction::LocalGet(index) => execute_inst_push_from_local(frame, stack, *index),
@@ -246,7 +244,7 @@ fn get_func_arg_count(fns: &[FuncInst], index: u32) -> Result<usize> {
 #[cfg(test)]
 mod executor_tests {
     use anyhow::Result;
-    use crate::{binary::{module::Module, types::Instruction}, execution::{runtime::{Frame, Runtime}, store::Store, value::Value
+    use crate::{binary::{module::Module, types::Instruction}, execution::{runtime::{Frame, Runtime, Stack}, store::Store, value::Value
         }};
 
     #[test]
@@ -258,7 +256,6 @@ mod executor_tests {
         rt.call_with_index(0, vec![])?;
 
         assert_eq!(0, rt.call_stack.len());
-        assert_eq!(0, rt.stack.len());
         Ok(())
     }
 
@@ -367,7 +364,6 @@ mod executor_tests {
 
         assert_eq!(Some(Value::I32(33)), instance.call_with_index(0, vec![])?);
 
-        assert_eq!(0, instance.stack.len());
         Ok(())
     }
 
@@ -386,7 +382,6 @@ mod executor_tests {
 
         assert_eq!(Some(Value::I32(22)), instance.call_with_index(0, vec![])?);
 
-        assert_eq!(0, instance.stack.len());
         Ok(())
     }
 
@@ -405,7 +400,6 @@ mod executor_tests {
 
         assert_eq!(Some(Value::I32(33)), instance.call_with_index(0, vec![])?);
 
-        assert_eq!(0, instance.stack.len());
         Ok(())        
     }
 
@@ -420,13 +414,13 @@ mod executor_tests {
         };
 
         let mut rt = Runtime { store: Store::new(Module::default())?, ..Default::default() };
-        let (ret_value, next_frame) = rt.execute_internal_function(next_frame)?;
+        let (ret_value, eval_result) = rt.execute_internal_function(next_frame, Stack::new())?;
 
         assert_eq!(None, ret_value);
-        assert_eq!(None, next_frame);
+        assert_eq!(None, eval_result.next_frame);
 
         assert_eq!(0, rt.call_stack.len());
-        assert_eq!(0, rt.stack.len());
+        assert_eq!(0, eval_result.next_stack.len());
         Ok(())    
     }
 
@@ -443,13 +437,13 @@ mod executor_tests {
         };
 
         let mut rt = Runtime { store: Store::new(Module::default())?, ..Default::default() };
-        let (ret_value, next_frame) = rt.execute_internal_function(next_frame)?;
+        let (ret_value, eval_result) = rt.execute_internal_function(next_frame, Stack::new())?;
 
         assert_eq!(Some(Value::I32(42)), ret_value);
-        assert_eq!(None, next_frame);
+        assert_eq!(None, eval_result.next_frame);
+        assert_eq!(0, eval_result.next_stack.len());
 
         assert_eq!(0, rt.call_stack.len());
-        assert_eq!(0, rt.stack.len());
         Ok(())
     }
 }
