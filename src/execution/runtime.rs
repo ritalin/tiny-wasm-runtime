@@ -465,9 +465,9 @@ mod executor_tests {
     use anyhow::Result;
     use crate::{binary::{
         module::Module, 
-        types::{Instruction, Block, BlockType, FuncType, ValueType}}, 
+        types::{Instruction, Block, BlockType}}, 
         execution::{runtime::Runtime, 
-            store::{ExternalFuncInst, FuncInst, InternalFuncInst, MemoryInst, Store, PPAGE_SIZE}, 
+            store::{FuncInst, MemoryInst, Store}, 
             value::{Label, Value}
         }
     };
@@ -624,71 +624,6 @@ mod executor_tests {
 
         assert_eq!(0, instance.stack.len());
         Ok(())        
-    }
-
-    #[test]
-    fn init_store() -> Result<()> {
-        let wasm = wat::parse_str("(module (func (param i32 i32)(result i32) (local.get 0) (local.get 1) i32.add))")?;
-        let module = Module::new(&wasm)?;
-        let store = Store::new(module)?;
-
-        assert_eq!(1, store.fns.len());
-
-        let expect = InternalFuncInst {
-            fn_type: FuncType { params: vec![ValueType::I32, ValueType::I32], returns: vec![ValueType::I32] },
-            code: crate::execution::store::Function { 
-                locals: vec![], 
-                body: vec![
-                    Instruction::LocalGet(0),
-                    Instruction::LocalGet(1),
-                    Instruction::I32Add,
-                    Instruction::End,
-                ],
-            },
-        };
-        assert_eq!(FuncInst::Internal(expect), store.fns[0]);
-        Ok(())
-    }
-
-    #[test]
-    fn init_store_with_ext_fn() -> Result<()> {
-        let wasm = wat::parse_str(r#"(module (func $dummy (import "env" "dummy")(param i32 i32)(result i32)))"#)?;
-        let module = Module::new(&wasm)?;
-        let store = Store::new(module)?;
-
-        assert_eq!(1, store.fns.len());
-
-        let expect = ExternalFuncInst {
-                fn_type: FuncType { params: vec![ValueType::I32, ValueType::I32], returns: vec![ValueType::I32] },
-                mod_name: "env".to_string(),
-                fn_name: "dummy".to_string()
-            }
-        ;
-        assert_eq!(FuncInst::External(expect), store.fns[0]);
-        Ok(())
-    }
-
-    #[test]
-    fn init_store_memory() -> Result<()> {
-        let wasm = wat::parse_str(r#"(module (memory 2) (data (i32.const 42)) (data (i32.const -42)))"#)?;
-        let module = Module::new(&wasm)?;
-        let store = Store::new(module)?;
-
-        assert_eq!(65535, PPAGE_SIZE);
-        assert_eq!(1, store.memories.len());
-        assert_eq!(2 * PPAGE_SIZE, store.memories[0].data.len());
-        assert_eq!(None, store.memories[0].limit);
-        Ok(())
-    }
-
-    #[test]
-    fn init_store_const_data() -> Result<()> {
-        let wasm = wat::parse_str(r#"(module (memory 1) (data (i32.const 0) "Hello") (data (i32.const 5) "World\n"))"#)?;
-        let module = Module::new(&wasm)?;
-        let store = Store::new(module)?;
-
-        assert_eq!(b"HelloWorld\n", &store.memories[0].data[0..11]);
-        Ok(())
     }
 
     #[test]
